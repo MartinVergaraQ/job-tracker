@@ -1,26 +1,29 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { collectJobs } from '@/app/features/jobs/adapters/services/collect-jobs'
 
 export async function POST(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
-    const expected = `Bearer ${process.env.COLLECTOR_SECRET}`
+    const internalSecret = process.env.INTERNAL_API_SECRET
 
-    if (!process.env.COLLECTOR_SECRET) {
-        return Response.json(
-            { error: 'Missing COLLECTOR_SECRET' },
+    if (!internalSecret) {
+        return NextResponse.json(
+            { error: 'Missing INTERNAL_API_SECRET' },
             { status: 500 }
         )
     }
 
-    if (authHeader !== expected) {
-        return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    if (authHeader !== `Bearer ${internalSecret}`) {
+        return NextResponse.json(
+            { error: 'Unauthorized' },
+            { status: 401 }
+        )
     }
 
     try {
         const result = await collectJobs()
-        return Response.json({ ok: true, result })
+        return NextResponse.json({ ok: true, result })
     } catch (error) {
-        return Response.json(
+        return NextResponse.json(
             {
                 ok: false,
                 error: error instanceof Error ? error.message : 'Unknown error',

@@ -89,43 +89,53 @@ function buildEmailContent(match: JobMatchRow, job: JobRow, profile: SearchProfi
     ].join('\n')
 
     const html = `
-    <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-      <h2>Nuevo trabajo para ${profile.name}</h2>
-      <p>Encontramos un nuevo trabajo que hace match con este perfil.</p>
+        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h2>Nuevo trabajo para ${profile.name}</h2>
+        <p>Encontramos un nuevo trabajo que hace match con este perfil.</p>
 
-      <ul>
-        <li><strong>Cargo:</strong> ${job.title}</li>
-        <li><strong>Empresa:</strong> ${job.company ?? 'Sin empresa'}</li>
-        <li><strong>Ubicación:</strong> ${job.location ?? 'Sin ubicación'}</li>
-        <li><strong>Fuente:</strong> ${job.source_name ?? 'Sin fuente'}</li>
-        <li><strong>Score:</strong> ${match.score}</li>
-      </ul>
+        <ul>
+            <li><strong>Cargo:</strong> ${job.title}</li>
+            <li><strong>Empresa:</strong> ${job.company ?? 'Sin empresa'}</li>
+            <li><strong>Ubicación:</strong> ${job.location ?? 'Sin ubicación'}</li>
+            <li><strong>Fuente:</strong> ${job.source_name ?? 'Sin fuente'}</li>
+            <li><strong>Score:</strong> ${match.score}</li>
+        </ul>
 
-      <p><strong>Motivos:</strong></p>
-      <ul>
-        ${reasons.length
+        <p><strong>Motivos:</strong></p>
+        <ul>
+            ${reasons.length
             ? reasons.map((reason) => `<li>${reason}</li>`).join('')
             : '<li>Sin razones detalladas</li>'
         }
-      </ul>
+        </ul>
 
-      <p>
-        <a href="${job.url ?? '#'}" target="_blank" rel="noopener noreferrer">
-          Ver oferta
-        </a>
-      </p>
-    </div>
-  `
+        <p>
+            <a href="${job.url ?? '#'}" target="_blank" rel="noopener noreferrer">
+            Ver oferta
+            </a>
+        </p>
+        </div>
+    `
 
     return { subject, text, html }
 }
 
 export async function POST(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
-    const secret = process.env.CRON_SECRET
+    const internalSecret = process.env.INTERNAL_API_SECRET
 
-    if (!secret || authHeader !== `Bearer ${secret}`) {
-        return unauthorized()
+    if (!internalSecret) {
+        return NextResponse.json(
+            { ok: false, error: 'Missing INTERNAL_API_SECRET' },
+            { status: 500 }
+        )
+    }
+
+    if (authHeader !== `Bearer ${internalSecret}`) {
+        return NextResponse.json(
+            { ok: false, error: 'Unauthorized' },
+            { status: 401 }
+        )
     }
 
     const supabase = createAdminClient()
@@ -133,28 +143,28 @@ export async function POST(request: NextRequest) {
     const { data, error } = await supabase
         .from('job_matches')
         .select(`
-      id,
-      score,
-      reasons,
-      is_match,
-      notified_at,
-      jobs (
         id,
-        title,
-        company,
-        location,
-        url,
-        source_name
-      ),
-      search_profiles (
-        id,
-        name,
-        slug,
-        notification_channel,
-        telegram_chat_id,
-        notification_email
-      )
-    `)
+        score,
+        reasons,
+        is_match,
+        notified_at,
+        jobs (
+            id,
+            title,
+            company,
+            location,
+            url,
+            source_name
+        ),
+        search_profiles (
+            id,
+            name,
+            slug,
+            notification_channel,
+            telegram_chat_id,
+            notification_email
+        )
+        `)
         .eq('is_match', true)
         .is('notified_at', null)
         .limit(100)
