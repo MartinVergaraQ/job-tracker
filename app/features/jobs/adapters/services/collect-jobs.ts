@@ -136,78 +136,35 @@ async function collectSource(
 }
 
 export async function collectJobs(): Promise<CollectJobsResult> {
-    const supabase = createAdminClient()
+    const profiles = await getActiveProfiles()
 
-    const { data: run, error: runError } = await supabase
-        .from('scrape_runs')
-        .insert({
-            source_name: 'multi-source',
-            status: 'running',
-            started_at: new Date().toISOString(),
-        })
-        .select('id')
-        .single()
+    const sourceCollections = await Promise.all([
+        collectSource('getonboard', getGetOnBoardJobs),
+        collectSource('chiletrabajos', getChileTrabajosJobs),
+    ])
 
-    if (runError) throw new Error(runError.message)
+    const sources = sourceCollections.map((item) => item.result)
 
-    try {
-        const profiles = await getActiveProfiles()
+    const jobs = dedupeJobsBySourceAndUrl(
+        sourceCollections.flatMap((item) => item.jobs)
+    )
 
-        const sourceCollections = await Promise.all([
-            collectSource('getonboard', getGetOnBoardJobs),
-            collectSource('chiletrabajos', getChileTrabajosJobs),
-        ])
+    let inserted = 0
+    let matchesCreated = 0
 
-        const sources = sourceCollections.map((item) => item.result)
+    for (const job of jobs) {
+        const jobId = await upsertJob(job)
+        if (!jobId) continue
 
-        const jobs = dedupeJobsBySourceAndUrl(
-            sourceCollections.flatMap((item) => item.jobs)
-        )
+        inserted += 1
+        matchesCreated += await createMatches(jobId, job, profiles)
+    }
 
-        let inserted = 0
-        let matchesCreated = 0
-
-        for (const job of jobs) {
-            const jobId = await upsertJob(job)
-            if (!jobId) continue
-
-            inserted += 1
-            matchesCreated += await createMatches(jobId, job, profiles)
-        }
-
-        const failedSources = sources
-            .filter((source) => !source.ok)
-            .map((source) => `${source.source_name}: ${source.error}`)
-            .join(' | ')
-
-        await supabase
-            .from('scrape_runs')
-            .update({
-                status: sources.some((source) => source.ok) ? 'success' : 'error',
-                error_message: failedSources || null,
-                jobs_found: jobs.length,
-                jobs_inserted: inserted,
-                finished_at: new Date().toISOString(),
-            })
-            .eq('id', run.id)
-
-        return {
-            jobs_found: jobs.length,
-            jobs_processed: inserted,
-            matches_created: matchesCreated,
-            sources,
-        }
-    } catch (error) {
-        await supabase
-            .from('scrape_runs')
-            .update({
-                status: 'error',
-                error_message: error instanceof Error ? error.message : 'Unknown error',
-                finished_at: new Date().toISOString(),
-            })
-            .eq('id', run.id)
-
-        throw error
+    return {
+        jobs_found: jobs.length,
+        jobs_processed: inserted,
+        matches_created: matchesCreated,
+        sources,
     }
 }
 
