@@ -5,10 +5,18 @@ import { getGetOnBoardJobs } from '../getonbrd.adapter'
 import { getChileTrabajosJobs } from '../chiletrabajos.adapter'
 import type { NormalizedJob, SearchProfile } from '../../types/job'
 
+type SourceResult = {
+    source_name: string
+    ok: boolean
+    jobs_found: number
+    error?: string
+}
+
 type CollectJobsResult = {
     jobs_found: number
     jobs_processed: number
     matches_created: number
+    sources: SourceResult[]
 }
 
 async function getActiveProfiles() {
@@ -94,6 +102,39 @@ async function createMatches(
     return created
 }
 
+async function collectSource(
+    sourceName: string,
+    runner: () => Promise<NormalizedJob[]>
+): Promise<{ jobs: NormalizedJob[]; result: SourceResult }> {
+    try {
+        const jobs = await runner()
+
+        return {
+            jobs,
+            result: {
+                source_name: sourceName,
+                ok: true,
+                jobs_found: jobs.length,
+            },
+        }
+    } catch (error) {
+        const message =
+            error instanceof Error ? error.message : 'Unknown source error'
+
+        console.error(`[collectJobs] source failed: ${sourceName}`, error)
+
+        return {
+            jobs: [],
+            result: {
+                source_name: sourceName,
+                ok: false,
+                jobs_found: 0,
+                error: message,
+            },
+        }
+    }
+}
+
 export async function collectJobs(): Promise<CollectJobsResult> {
     const supabase = createAdminClient()
 
@@ -111,15 +152,17 @@ export async function collectJobs(): Promise<CollectJobsResult> {
 
     try {
         const profiles = await getActiveProfiles()
-        const [getOnBoardJobs, chileTrabajosJobs] = await Promise.all([
-            getGetOnBoardJobs(),
-            getChileTrabajosJobs(),
+
+        const sourceCollections = await Promise.all([
+            collectSource('getonboard', getGetOnBoardJobs),
+            collectSource('chiletrabajos', getChileTrabajosJobs),
         ])
 
-        const jobs = dedupeJobsBySourceAndUrl([
-            ...getOnBoardJobs,
-            ...chileTrabajosJobs,
-        ])
+        const sources = sourceCollections.map((item) => item.result)
+
+        const jobs = dedupeJobsBySourceAndUrl(
+            sourceCollections.flatMap((item) => item.jobs)
+        )
 
         let inserted = 0
         let matchesCreated = 0
@@ -132,10 +175,16 @@ export async function collectJobs(): Promise<CollectJobsResult> {
             matchesCreated += await createMatches(jobId, job, profiles)
         }
 
+        const failedSources = sources
+            .filter((source) => !source.ok)
+            .map((source) => `${source.source_name}: ${source.error}`)
+            .join(' | ')
+
         await supabase
             .from('scrape_runs')
             .update({
-                status: 'success',
+                status: sources.some((source) => source.ok) ? 'success' : 'error',
+                error_message: failedSources || null,
                 jobs_found: jobs.length,
                 jobs_inserted: inserted,
                 finished_at: new Date().toISOString(),
@@ -146,6 +195,7 @@ export async function collectJobs(): Promise<CollectJobsResult> {
             jobs_found: jobs.length,
             jobs_processed: inserted,
             matches_created: matchesCreated,
+            sources,
         }
     } catch (error) {
         await supabase
