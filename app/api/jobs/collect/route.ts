@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { collectJobs } from '@/app/features/jobs/adapters/services/collect-jobs'
-import { logScrapeRun } from '@/lib/monitoring/log-scrape-run'
+import {
+    logScrapeRun,
+    type CollectResult,
+} from '@/lib/monitoring/log-scrape-run'
+import { notifyRunHealthChange } from '@/lib/monitoring/notify-run-health-change'
+import { getRunHealthFromCollectResult } from '@/lib/monitoring/run-health'
 
 export async function POST(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
@@ -23,18 +28,34 @@ export async function POST(request: NextRequest) {
     const startedAt = new Date()
 
     try {
-        const result = await collectJobs()
+        const result: CollectResult = await collectJobs()
         const finishedAt = new Date()
 
+        let runId: string | null = null
+
         try {
-            await logScrapeRun({
+            const logResult = await logScrapeRun({
                 status: 'success',
                 startedAt,
                 finishedAt,
                 result,
             })
+
+            runId = logResult.runId
         } catch (logError) {
             console.error('logScrapeRun success error:', logError)
+        }
+
+        if (runId) {
+            try {
+                await notifyRunHealthChange({
+                    currentRunId: runId,
+                    currentHealth: getRunHealthFromCollectResult(result),
+                    result,
+                })
+            } catch (notifyError) {
+                console.error('notifyRunHealthChange success error:', notifyError)
+            }
         }
 
         return NextResponse.json({ ok: true, result })
@@ -43,15 +64,31 @@ export async function POST(request: NextRequest) {
         const message =
             error instanceof Error ? error.message : 'Unknown error'
 
+        let runId: string | null = null
+
         try {
-            await logScrapeRun({
+            const logResult = await logScrapeRun({
                 status: 'error',
                 startedAt,
                 finishedAt,
                 errorMessage: message,
             })
+
+            runId = logResult.runId
         } catch (logError) {
             console.error('logScrapeRun error path failed:', logError)
+        }
+
+        if (runId) {
+            try {
+                await notifyRunHealthChange({
+                    currentRunId: runId,
+                    currentHealth: 'error',
+                    errorMessage: message,
+                })
+            } catch (notifyError) {
+                console.error('notifyRunHealthChange error path failed:', notifyError)
+            }
         }
 
         return NextResponse.json(

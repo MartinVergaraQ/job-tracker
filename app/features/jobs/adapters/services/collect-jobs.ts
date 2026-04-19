@@ -4,6 +4,7 @@ import { scoreJob } from '../core/score-job'
 import { getGetOnBoardJobs } from '../getonbrd.adapter'
 import { getChileTrabajosJobs } from '../chiletrabajos.adapter'
 import type { NormalizedJob, SearchProfile } from '../../types/job'
+import { getDuolaboralJobs } from '../duolaboral.adapter'
 
 type SourceResult = {
     source_name: string
@@ -141,6 +142,7 @@ export async function collectJobs(): Promise<CollectJobsResult> {
     const sourceCollections = await Promise.all([
         collectSource('getonboard', getGetOnBoardJobs),
         collectSource('chiletrabajos', getChileTrabajosJobs),
+        collectSource('duolaboral', getDuolaboralJobs),
     ])
 
     const sources = sourceCollections.map((item) => item.result)

@@ -48,6 +48,22 @@ export async function GET(request: NextRequest) {
 
     const collectJson = await collectResponse.json().catch(() => null)
 
+    const enrichResponse = await fetch(`${baseUrl}/api/jobs/enrich`, {
+        method: 'POST',
+        headers,
+        cache: 'no-store',
+    })
+
+    const enrichJson = await enrichResponse.json().catch(() => null)
+
+    const rescoreResponse = await fetch(`${baseUrl}/api/jobs/rescore`, {
+        method: 'POST',
+        headers,
+        cache: 'no-store',
+    })
+
+    const rescoreJson = await rescoreResponse.json().catch(() => null)
+
     const notifyResponse = await fetch(`${baseUrl}/api/notifications/process`, {
         method: 'POST',
         headers,
@@ -57,9 +73,15 @@ export async function GET(request: NextRequest) {
     const notifyJson = await notifyResponse.json().catch(() => null)
 
     return NextResponse.json({
-        ok: collectResponse.ok && notifyResponse.ok,
+        ok:
+            collectResponse.ok &&
+            enrichResponse.ok &&
+            rescoreResponse.ok &&
+            notifyResponse.ok,
         duration_ms: Date.now() - startedAt,
         collect: collectJson,
+        enrich: enrichJson,
+        rescore: rescoreJson,
         notify: notifyJson,
     })
 }
