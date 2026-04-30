@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { setJobApplicationStatus } from '../top-matches/actions'
 import { clearFollowUp, scheduleFollowUp } from './actions'
+import { connection } from 'next/server'
 
 type JobRow = {
     id: string
@@ -562,6 +563,8 @@ function TodaySkeleton() {
 }
 
 async function TodayContent() {
+    await connection()
+
     const { pendingMatches, followUps, interviews, meta } = await getTodayData()
 
     return (
