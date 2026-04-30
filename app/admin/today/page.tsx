@@ -1,12 +1,11 @@
-import { Suspense } from 'react'
+import { Suspense, type ReactNode } from 'react'
 import Link from 'next/link'
 import { connection } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { setJobApplicationStatus } from '../top-matches/actions'
 import { clearFollowUp, scheduleFollowUp } from './actions'
 
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
+type JobStatus = 'saved' | 'applied' | 'interview' | 'rejected' | 'offer'
 
 type JobRow = {
     id: string
@@ -37,7 +36,7 @@ type JobApplicationRow = {
     id: string
     job_id: string
     profile_id: string
-    status: 'saved' | 'applied' | 'interview' | 'rejected' | 'offer'
+    status: JobStatus
     applied_at: string | null
     follow_up_at: string | null
     notes: string | null
@@ -49,7 +48,7 @@ type JobApplicationRow = {
 type ExistingApplicationRow = {
     job_id: string
     profile_id: string
-    status: 'saved' | 'applied' | 'interview' | 'rejected' | 'offer'
+    status: JobStatus
 }
 
 function getRelationObject<T>(value: T | T[] | null | undefined): T | null {
@@ -58,6 +57,16 @@ function getRelationObject<T>(value: T | T[] | null | undefined): T | null {
     }
 
     return value ?? null
+}
+
+function getNumberEnv(name: string, defaultValue: number) {
+    const raw = process.env[name]
+    const parsed = Number(raw)
+
+    if (!raw) return defaultValue
+    if (!Number.isFinite(parsed)) return defaultValue
+
+    return parsed
 }
 
 function formatDate(value: string | null) {
@@ -75,6 +84,7 @@ function getSourceClasses(sourceName: string | null) {
     if (sourceName === 'chiletrabajos') return 'bg-orange-100 text-orange-700'
     if (sourceName === 'getonboard') return 'bg-green-100 text-green-700'
     if (sourceName === 'computrabajo_email_alerts') return 'bg-cyan-100 text-cyan-700'
+
     return 'bg-neutral-100 text-neutral-700'
 }
 
@@ -84,6 +94,7 @@ function getStatusLabel(status: string) {
     if (status === 'interview') return 'Entrevista'
     if (status === 'rejected') return 'Rechazada'
     if (status === 'offer') return 'Oferta'
+
     return 'Pendiente'
 }
 
@@ -95,17 +106,23 @@ function getPublishedTime(job: JobRow | null) {
 }
 
 async function getTodayData() {
+    /**
+     * Importante con Next + cacheComponents:
+     * connection() debe ejecutarse ANTES de usar Date.now(),
+     * new Date() para "ahora", Supabase dinámico o cualquier dato uncached.
+     */
     await connection()
 
     const supabase = createAdminClient()
 
-    const lookbackHours = Number(process.env.TODAY_LOOKBACK_HOURS ?? 72)
-    const minScore = Number(process.env.TODAY_MIN_SCORE ?? 60)
+    const lookbackHours = getNumberEnv('TODAY_LOOKBACK_HOURS', 72)
+    const minScore = getNumberEnv('TODAY_MIN_SCORE', 60)
 
     const currentTime = Date.now()
     const since = new Date(
         currentTime - lookbackHours * 60 * 60 * 1000
     ).toISOString()
+
     const now = new Date(currentTime).toISOString()
 
     const { data: matchData, error: matchError } = await supabase
@@ -320,7 +337,9 @@ function MatchActionCard({
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                         <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${getSourceClasses(job.source_name)}`}
+                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${getSourceClasses(
+                                job.source_name
+                            )}`}
                         >
                             {job.source_name ?? 'sin fuente'}
                         </span>
@@ -337,10 +356,12 @@ function MatchActionCard({
                     <div>
                         <h3 className="text-lg font-semibold">{job.title}</h3>
                         <p className="text-sm text-neutral-400">
-                            {job.company ?? 'Sin empresa'} · {job.location ?? 'Sin ubicación'}
+                            {job.company ?? 'Sin empresa'} ·{' '}
+                            {job.location ?? 'Sin ubicación'}
                         </p>
                         <p className="mt-1 text-xs text-neutral-500">
-                            Perfil: {profile.name} · Publicado: {formatDate(job.published_at)}
+                            Perfil: {profile.name} · Publicado:{' '}
+                            {formatDate(job.published_at)}
                         </p>
                     </div>
                 </div>
@@ -368,6 +389,7 @@ function MatchActionCard({
 
             <div className="mt-4 rounded-xl bg-neutral-950 p-4">
                 <p className="text-sm font-medium">Por qué conviene</p>
+
                 <ul className="mt-3 space-y-1 text-sm text-neutral-300">
                     {(row.reasons ?? []).slice(0, 6).map((reason, index) => (
                         <li key={index}>• {reason}</li>
@@ -379,6 +401,7 @@ function MatchActionCard({
                 <form action={setJobApplicationStatus}>
                     <input type="hidden" name="job_id" value={job.id} />
                     <input type="hidden" name="profile_id" value={profile.id} />
+
                     <button
                         type="submit"
                         name="status"
@@ -392,6 +415,7 @@ function MatchActionCard({
                 <form action={setJobApplicationStatus}>
                     <input type="hidden" name="job_id" value={job.id} />
                     <input type="hidden" name="profile_id" value={profile.id} />
+
                     <button
                         type="submit"
                         name="status"
@@ -405,6 +429,7 @@ function MatchActionCard({
                 <form action={setJobApplicationStatus}>
                     <input type="hidden" name="job_id" value={job.id} />
                     <input type="hidden" name="profile_id" value={profile.id} />
+
                     <button
                         type="submit"
                         name="status"
@@ -437,13 +462,17 @@ function ApplicationActionCard({
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                         <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${getSourceClasses(job.source_name)}`}
+                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${getSourceClasses(
+                                job.source_name
+                            )}`}
                         >
                             {job.source_name ?? 'sin fuente'}
                         </span>
 
                         <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700">
-                            {variant === 'follow_up' ? 'Seguimiento' : 'Entrevista'}
+                            {variant === 'follow_up'
+                                ? 'Seguimiento'
+                                : 'Entrevista'}
                         </span>
 
                         <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-700">
@@ -454,14 +483,19 @@ function ApplicationActionCard({
                     <div>
                         <h3 className="text-lg font-semibold">{job.title}</h3>
                         <p className="text-sm text-neutral-400">
-                            {job.company ?? 'Sin empresa'} · {job.location ?? 'Sin ubicación'}
+                            {job.company ?? 'Sin empresa'} ·{' '}
+                            {job.location ?? 'Sin ubicación'}
                         </p>
+
                         <p className="mt-1 text-xs text-neutral-500">
-                            Perfil: {profile.name} · Postulación: {formatDate(application.applied_at)}
+                            Perfil: {profile.name} · Postulación:{' '}
+                            {formatDate(application.applied_at)}
                         </p>
+
                         {application.follow_up_at ? (
                             <p className="mt-1 text-xs text-neutral-500">
-                                Seguimiento: {formatDate(application.follow_up_at)}
+                                Seguimiento:{' '}
+                                {formatDate(application.follow_up_at)}
                             </p>
                         ) : null}
                     </div>
@@ -498,8 +532,13 @@ function ApplicationActionCard({
                 {variant === 'follow_up' ? (
                     <>
                         <form action={scheduleFollowUp}>
-                            <input type="hidden" name="application_id" value={application.id} />
+                            <input
+                                type="hidden"
+                                name="application_id"
+                                value={application.id}
+                            />
                             <input type="hidden" name="days" value="5" />
+
                             <button
                                 type="submit"
                                 className="rounded-xl border px-3 py-2 text-sm font-medium hover:bg-neutral-950"
@@ -509,7 +548,12 @@ function ApplicationActionCard({
                         </form>
 
                         <form action={clearFollowUp}>
-                            <input type="hidden" name="application_id" value={application.id} />
+                            <input
+                                type="hidden"
+                                name="application_id"
+                                value={application.id}
+                            />
+
                             <button
                                 type="submit"
                                 className="rounded-xl border px-3 py-2 text-sm font-medium hover:bg-neutral-950"
@@ -523,6 +567,7 @@ function ApplicationActionCard({
                 <form action={setJobApplicationStatus}>
                     <input type="hidden" name="job_id" value={job.id} />
                     <input type="hidden" name="profile_id" value={profile.id} />
+
                     <button
                         type="submit"
                         name="status"
@@ -536,6 +581,7 @@ function ApplicationActionCard({
                 <form action={setJobApplicationStatus}>
                     <input type="hidden" name="job_id" value={job.id} />
                     <input type="hidden" name="profile_id" value={profile.id} />
+
                     <button
                         type="submit"
                         name="status"
@@ -553,7 +599,7 @@ function ApplicationActionCard({
 function EmptyState({
     children,
 }: {
-    children: React.ReactNode
+    children: ReactNode
 }) {
     return (
         <div className="rounded-2xl border p-6 text-sm text-neutral-400">
@@ -582,7 +628,8 @@ async function TodayContent() {
     return (
         <div className="space-y-8">
             <div className="rounded-2xl border p-4 text-sm text-neutral-400">
-                Ventana de oportunidades: últimas {meta.lookbackHours} horas · Score mínimo: {meta.minScore}
+                Ventana de oportunidades: últimas {meta.lookbackHours} horas ·
+                Score mínimo: {meta.minScore}
             </div>
 
             <section className="grid gap-4 md:grid-cols-3">
@@ -600,7 +647,10 @@ async function TodayContent() {
                 </div>
 
                 {!pendingMatches.length ? (
-                    <EmptyState>No tienes postulaciones urgentes ahora. Buena señal: estás al día.</EmptyState>
+                    <EmptyState>
+                        No tienes postulaciones urgentes ahora. Buena señal: estás
+                        al día.
+                    </EmptyState>
                 ) : (
                     <div className="space-y-4">
                         {pendingMatches.map((row) => (
@@ -666,7 +716,8 @@ export default function AdminTodayPage() {
                 <div>
                     <h1 className="text-2xl font-semibold">Acciones de hoy</h1>
                     <p className="mt-1 text-sm text-neutral-500">
-                        Tu tablero diario para postular, hacer seguimiento y mover oportunidades.
+                        Tu tablero diario para postular, hacer seguimiento y mover
+                        oportunidades.
                     </p>
                 </div>
 
