@@ -3,13 +3,16 @@ import { createFingerprint } from '../core/create-fingerprint'
 import { scoreJob } from '../core/score-job'
 import { getGetOnBoardJobs } from '../getonbrd.adapter'
 import { getChileTrabajosJobs } from '../chiletrabajos.adapter'
-import type { NormalizedJob, SearchProfile } from '../../types/job'
 import { getDuolaboralJobs } from '../duolaboral.adapter'
+import { getLinkedInEmailJobs } from '../linkedin-email.adapter'
+import { getComputrabajoEmailJobs } from '../computrabajo-email.adapter'
+import type { NormalizedJob, SearchProfile } from '../../types/job'
 
 type SourceResult = {
     source_name: string
     ok: boolean
     jobs_found: number
+    skipped?: boolean
     error?: string
 }
 
@@ -18,6 +21,20 @@ type CollectJobsResult = {
     jobs_processed: number
     matches_created: number
     sources: SourceResult[]
+}
+
+type SourceConfig = {
+    source_name: string
+    enabled: boolean
+    runner: () => Promise<NormalizedJob[]>
+}
+
+function envEnabled(name: string, defaultValue = true) {
+    const value = process.env[name]
+
+    if (value == null) return defaultValue
+
+    return value.toLowerCase() === 'true'
 }
 
 async function getActiveProfiles() {
@@ -97,6 +114,7 @@ async function createMatches(
             )
 
         if (error) throw new Error(error.message)
+
         created += 1
     }
 
@@ -136,14 +154,58 @@ async function collectSource(
     }
 }
 
+async function collectConfiguredSource(
+    source: SourceConfig
+): Promise<{ jobs: NormalizedJob[]; result: SourceResult }> {
+    if (!source.enabled) {
+        return {
+            jobs: [],
+            result: {
+                source_name: source.source_name,
+                ok: true,
+                jobs_found: 0,
+                skipped: true,
+            },
+        }
+    }
+
+    return collectSource(source.source_name, source.runner)
+}
+
 export async function collectJobs(): Promise<CollectJobsResult> {
     const profiles = await getActiveProfiles()
 
-    const sourceCollections = await Promise.all([
-        collectSource('getonboard', getGetOnBoardJobs),
-        collectSource('chiletrabajos', getChileTrabajosJobs),
-        collectSource('duolaboral', getDuolaboralJobs),
-    ])
+    const sourceConfigs: SourceConfig[] = [
+        {
+            source_name: 'getonboard',
+            enabled: envEnabled('GETONBOARD_ENABLED', true),
+            runner: getGetOnBoardJobs,
+        },
+        {
+            source_name: 'chiletrabajos',
+            enabled: envEnabled('CHILETRABAJOS_ENABLED', true),
+            runner: getChileTrabajosJobs,
+        },
+        {
+            source_name: 'duolaboral',
+            enabled: envEnabled('DUOLABORAL_ENABLED', false),
+            runner: getDuolaboralJobs,
+        },
+        {
+            source_name: 'linkedin_email_alerts',
+            enabled: envEnabled('LINKEDIN_EMAIL_ALERTS_ENABLED', true),
+            runner: getLinkedInEmailJobs,
+        },
+        {
+            source_name: 'computrabajo_email_alerts',
+            enabled: envEnabled('COMPUTRABAJO_EMAIL_ALERTS_ENABLED', true),
+            runner: getComputrabajoEmailJobs,
+        },
+    ]
+
+    const sourceCollections = await Promise.all(
+        sourceConfigs.map(collectConfiguredSource)
+    )
 
     const sources = sourceCollections.map((item) => item.result)
 
@@ -170,7 +232,9 @@ export async function collectJobs(): Promise<CollectJobsResult> {
     }
 }
 
-function dedupeJobsBySourceAndUrl<T extends { source_name: string; url: string }>(jobs: T[]) {
+function dedupeJobsBySourceAndUrl<T extends { source_name: string; url: string }>(
+    jobs: T[]
+) {
     const seen = new Set<string>()
     const result: T[] = []
 

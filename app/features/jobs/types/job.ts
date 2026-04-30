@@ -7,9 +7,17 @@ export type JobSeniority =
     | 'trainee'
     | 'unknown'
 
+export type JobSourceType =
+    | 'mock'
+    | 'api'
+    | 'rss'
+    | 'html'
+    | 'browser'
+    | 'email'
+
 export type NormalizedJob = {
     source_name: string
-    source_type: 'mock' | 'api' | 'rss' | 'html' | 'browser'
+    source_type: JobSourceType
     external_id: string | null
     url: string
     title: string

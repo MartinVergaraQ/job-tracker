@@ -3,13 +3,21 @@ import { NextRequest, NextResponse } from 'next/server'
 export const maxDuration = 60
 
 function getBaseUrl(request: NextRequest) {
-    const envUrl = process.env.NEXT_PUBLIC_APP_URL
-    if (envUrl) return envUrl
+    return new URL(request.url).origin
+}
 
-    const host = request.headers.get('host')
-    const protocol = host?.includes('localhost') ? 'http' : 'https'
+async function parseResponse(response: Response) {
+    const contentType = response.headers.get('content-type') ?? ''
 
-    return `${protocol}://${host}`
+    if (contentType.includes('application/json')) {
+        return response.json().catch(() => null)
+    }
+
+    return {
+        ok: false,
+        status: response.status,
+        text: await response.text().catch(() => ''),
+    }
 }
 
 export async function GET(request: NextRequest) {
@@ -45,32 +53,28 @@ export async function GET(request: NextRequest) {
         headers,
         cache: 'no-store',
     })
-
-    const collectJson = await collectResponse.json().catch(() => null)
+    const collectJson = await parseResponse(collectResponse)
 
     const enrichResponse = await fetch(`${baseUrl}/api/jobs/enrich`, {
         method: 'POST',
         headers,
         cache: 'no-store',
     })
-
-    const enrichJson = await enrichResponse.json().catch(() => null)
+    const enrichJson = await parseResponse(enrichResponse)
 
     const rescoreResponse = await fetch(`${baseUrl}/api/jobs/rescore`, {
         method: 'POST',
         headers,
         cache: 'no-store',
     })
-
-    const rescoreJson = await rescoreResponse.json().catch(() => null)
+    const rescoreJson = await parseResponse(rescoreResponse)
 
     const notifyResponse = await fetch(`${baseUrl}/api/notifications/process`, {
         method: 'POST',
         headers,
         cache: 'no-store',
     })
-
-    const notifyJson = await notifyResponse.json().catch(() => null)
+    const notifyJson = await parseResponse(notifyResponse)
 
     return NextResponse.json({
         ok:
@@ -79,6 +83,7 @@ export async function GET(request: NextRequest) {
             rescoreResponse.ok &&
             notifyResponse.ok,
         duration_ms: Date.now() - startedAt,
+        base_url: baseUrl,
         collect: collectJson,
         enrich: enrichJson,
         rescore: rescoreJson,

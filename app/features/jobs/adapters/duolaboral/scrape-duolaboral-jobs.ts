@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from 'playwright'
 import { parseDuolaboralHtml } from './parse-duolaboral-html'
@@ -79,6 +80,30 @@ function dedupeJobs(jobs: ScrapedJob[]) {
     return Array.from(map.values())
 }
 
+async function saveDebugArtifacts(params: {
+    html: string
+    pageUrl: string
+    pageTitle: string
+    screenshotBuffer: Buffer
+    label: string
+}) {
+    const dir = path.join(process.cwd(), 'tmp')
+    await fs.mkdir(dir, { recursive: true })
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const baseName = `duolaboral-${params.label}-${stamp}`
+
+    await fs.writeFile(path.join(dir, `${baseName}.html`), params.html, 'utf8')
+    await fs.writeFile(path.join(dir, `${baseName}.png`), params.screenshotBuffer)
+
+    console.log('[duolaboral][debug]', {
+        label: params.label,
+        pageUrl: params.pageUrl,
+        pageTitle: params.pageTitle,
+        savedAs: baseName,
+    })
+}
+
 export async function scrapeDuolaboralJobs(): Promise<ScrapedJob[]> {
     const browser = await chromium.launch({
         headless: true,
@@ -113,7 +138,16 @@ export async function scrapeDuolaboralJobs(): Promise<ScrapedJob[]> {
                 // algunas páginas nunca quedan totalmente idle
             })
 
+            await page.waitForTimeout(4000)
+
+            await page
+                .waitForSelector('a[href*="/jobs/"]', { timeout: 15000 })
+                .catch(() => null)
+
+            const visibleLinks = await page.locator('a[href*="/jobs/"]').count()
             const html = await page.content()
+            const pageTitle = await page.title()
+            const pageUrl = page.url()
 
             if (pageNumber === 1) {
                 detectedLastPage = extractLastPageNumber(html)
@@ -121,11 +155,23 @@ export async function scrapeDuolaboralJobs(): Promise<ScrapedJob[]> {
 
             const pageJobs = parseDuolaboralHtml(html)
 
-            console.log(
-                `[duolaboral] page=${pageNumber}/${Math.min(detectedLastPage, maxPages)} jobs=${pageJobs.length}`
-            )
+            console.log('[duolaboral]', {
+                page: `${pageNumber}/${Math.min(detectedLastPage, maxPages)}`,
+                pageUrl,
+                pageTitle,
+                visibleLinks,
+                parsedJobs: pageJobs.length,
+            })
 
             if (!pageJobs.length) {
+                const screenshotBuffer = await page.screenshot({ fullPage: true })
+                await saveDebugArtifacts({
+                    html,
+                    pageUrl,
+                    pageTitle,
+                    screenshotBuffer,
+                    label: `zero-results-page-${pageNumber}`,
+                })
                 break
             }
 
