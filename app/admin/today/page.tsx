@@ -1,9 +1,12 @@
 import { Suspense } from 'react'
 import Link from 'next/link'
+import { connection } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { setJobApplicationStatus } from '../top-matches/actions'
 import { clearFollowUp, scheduleFollowUp } from './actions'
-import { connection } from 'next/server'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 type JobRow = {
     id: string
@@ -92,12 +95,18 @@ function getPublishedTime(job: JobRow | null) {
 }
 
 async function getTodayData() {
+    await connection()
+
     const supabase = createAdminClient()
 
     const lookbackHours = Number(process.env.TODAY_LOOKBACK_HOURS ?? 72)
     const minScore = Number(process.env.TODAY_MIN_SCORE ?? 60)
-    const since = new Date(Date.now() - lookbackHours * 60 * 60 * 1000).toISOString()
-    const now = new Date().toISOString()
+
+    const currentTime = Date.now()
+    const since = new Date(
+        currentTime - lookbackHours * 60 * 60 * 1000
+    ).toISOString()
+    const now = new Date(currentTime).toISOString()
 
     const { data: matchData, error: matchError } = await supabase
         .from('job_matches')
@@ -146,8 +155,13 @@ async function getTodayData() {
         })
         .filter(Boolean) as Array<{ job_id: string; profile_id: string }>
 
-    const uniqueJobIds = Array.from(new Set(matchKeys.map((item) => item.job_id)))
-    const uniqueProfileIds = Array.from(new Set(matchKeys.map((item) => item.profile_id)))
+    const uniqueJobIds = Array.from(
+        new Set(matchKeys.map((item) => item.job_id))
+    )
+
+    const uniqueProfileIds = Array.from(
+        new Set(matchKeys.map((item) => item.profile_id))
+    )
 
     let existingApplications: ExistingApplicationRow[] = []
 
@@ -563,8 +577,6 @@ function TodaySkeleton() {
 }
 
 async function TodayContent() {
-    await connection()
-
     const { pendingMatches, followUps, interviews, meta } = await getTodayData()
 
     return (
