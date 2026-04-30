@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { Suspense } from 'react'
+import { connection } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 type JobRow = {
@@ -95,20 +97,20 @@ async function getConversionData(filters: FilterSearchParams) {
     const { data: matchData, error: matchError } = await supabase
         .from('job_matches')
         .select(`
-      id,
-      score,
-      is_match,
-      jobs (
-        id,
-        source_name,
-        published_at
-      ),
-      search_profiles (
-        id,
-        name,
-        slug
-      )
-    `)
+            id,
+            score,
+            is_match,
+            jobs (
+                id,
+                source_name,
+                published_at
+            ),
+            search_profiles (
+                id,
+                name,
+                slug
+            )
+        `)
         .eq('is_match', true)
         .gte('jobs.published_at', since)
         .limit(1000)
@@ -353,7 +355,7 @@ function FiltersBar({
     sources: string[]
 }) {
     return (
-        <section className="rounded-2xl border p-4 space-y-4">
+        <section className="space-y-4 rounded-2xl border p-4">
             <div>
                 <p className="mb-2 text-sm text-neutral-500">Perfil</p>
                 <div className="flex flex-wrap gap-2">
@@ -561,15 +563,103 @@ function ConversionTableByCv({
     )
 }
 
-export default async function AdminConversionPage({
+function ConversionSkeleton() {
+    return (
+        <div className="space-y-6">
+            <div className="rounded-2xl border p-4">
+                <div className="h-4 w-64 animate-pulse rounded bg-neutral-800" />
+            </div>
+
+            <div className="rounded-2xl border p-4">
+                <div className="h-4 w-32 animate-pulse rounded bg-neutral-800" />
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {Array.from({ length: 8 }).map((_, index) => (
+                        <div
+                            key={index}
+                            className="h-9 w-28 animate-pulse rounded-xl bg-neutral-900"
+                        />
+                    ))}
+                </div>
+            </div>
+
+            <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+                {Array.from({ length: 6 }).map((_, index) => (
+                    <div key={index} className="rounded-2xl border p-4">
+                        <div className="h-4 w-24 animate-pulse rounded bg-neutral-800" />
+                        <div className="mt-3 h-8 w-16 animate-pulse rounded bg-neutral-900" />
+                    </div>
+                ))}
+            </section>
+
+            <div className="rounded-2xl border p-5">
+                <div className="h-5 w-48 animate-pulse rounded bg-neutral-800" />
+                <div className="mt-4 h-48 animate-pulse rounded bg-neutral-950" />
+            </div>
+        </div>
+    )
+}
+
+async function ConversionContent({
     searchParams,
 }: {
     searchParams: Promise<FilterSearchParams>
 }) {
+    await connection()
+
     const filters = await searchParams
     const { totals, profiles, sources, sourceRows, cvRows, meta } =
         await getConversionData(filters)
 
+    return (
+        <div className="space-y-6">
+            <div className="rounded-2xl border p-4 text-sm text-neutral-400">
+                Ventana: últimos {meta.lookbackDays} días
+            </div>
+
+            <FiltersBar
+                selectedProfile={filters.profile}
+                selectedSource={filters.source}
+                selectedCvVariant={filters.cvVariant}
+                profiles={profiles}
+                sources={sources}
+            />
+
+            <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+                <KpiCard label="Matches" value={totals.matches} />
+
+                <KpiCard
+                    label="Postulé"
+                    value={totals.applied}
+                    helper={formatPercent(safeRate(totals.applied, totals.matches))}
+                />
+
+                <KpiCard
+                    label="Entrevista"
+                    value={totals.interview}
+                    helper={formatPercent(safeRate(totals.interview, totals.matches))}
+                />
+
+                <KpiCard
+                    label="Oferta"
+                    value={totals.offer}
+                    helper={formatPercent(safeRate(totals.offer, totals.matches))}
+                />
+
+                <KpiCard label="Guardadas" value={totals.saved} />
+                <KpiCard label="CV sin definir" value={totals.unassignedCv} />
+            </section>
+
+            <ConversionTableBySource rows={sourceRows} />
+            <ConversionTableByCv rows={cvRows} />
+        </div>
+    )
+}
+
+export default function AdminConversionPage({
+    searchParams,
+}: {
+    searchParams: Promise<FilterSearchParams>
+}) {
     return (
         <main className="space-y-6 p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -588,41 +678,9 @@ export default async function AdminConversionPage({
                 </Link>
             </div>
 
-            <div className="rounded-2xl border p-4 text-sm text-neutral-400">
-                Ventana: últimos {meta.lookbackDays} días
-            </div>
-
-            <FiltersBar
-                selectedProfile={filters.profile}
-                selectedSource={filters.source}
-                selectedCvVariant={filters.cvVariant}
-                profiles={profiles}
-                sources={sources}
-            />
-
-            <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-                <KpiCard label="Matches" value={totals.matches} />
-                <KpiCard
-                    label="Postulé"
-                    value={totals.applied}
-                    helper={formatPercent(safeRate(totals.applied, totals.matches))}
-                />
-                <KpiCard
-                    label="Entrevista"
-                    value={totals.interview}
-                    helper={formatPercent(safeRate(totals.interview, totals.matches))}
-                />
-                <KpiCard
-                    label="Oferta"
-                    value={totals.offer}
-                    helper={formatPercent(safeRate(totals.offer, totals.matches))}
-                />
-                <KpiCard label="Guardadas" value={totals.saved} />
-                <KpiCard label="CV sin definir" value={totals.unassignedCv} />
-            </section>
-
-            <ConversionTableBySource rows={sourceRows} />
-            <ConversionTableByCv rows={cvRows} />
+            <Suspense fallback={<ConversionSkeleton />}>
+                <ConversionContent searchParams={searchParams} />
+            </Suspense>
         </main>
     )
 }
