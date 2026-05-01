@@ -4,6 +4,12 @@ import { connection } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getRunHealthFromPersistedRun } from '@/lib/monitoring/run-health'
 
+
+type DashboardWarning = {
+    source: string
+    message: string
+}
+
 type ScrapeRunSource = {
     source_name: string
     ok: boolean
@@ -113,6 +119,8 @@ function getSourceClasses(sourceName: string) {
 async function getDashboardData() {
     const supabase = createAdminClient()
 
+    const warnings: DashboardWarning[] = []
+
     const jobs24hSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
     const conversionLookbackDays = Number(process.env.CONVERSION_LOOKBACK_DAYS ?? 30)
     const conversionSince = new Date(
@@ -171,18 +179,47 @@ async function getDashboardData() {
             `)
             .eq('is_match', true)
             .gte('jobs.published_at', conversionSince)
-            .limit(1000),
+            .limit(500),
     ])
 
-    if (latestRunResponse.error) throw new Error(latestRunResponse.error.message)
-    if (jobs24hResponse.error) throw new Error(jobs24hResponse.error.message)
-    if (profilesResponse.error) throw new Error(profilesResponse.error.message)
-    if (matchRowsResponse.error) throw new Error(matchRowsResponse.error.message)
+    if (latestRunResponse.error) {
+        warnings.push({
+            source: 'latest_run',
+            message: latestRunResponse.error.message,
+        })
+    }
 
-    const latestRun = (latestRunResponse.data ?? null) as LatestRun | null
-    const jobs24h = jobs24hResponse.count ?? 0
-    const profilesCount = profilesResponse.count ?? 0
-    const matchRows = (matchRowsResponse.data ?? []) as JobMatchRow[]
+    if (jobs24hResponse.error) {
+        warnings.push({
+            source: 'jobs_24h',
+            message: jobs24hResponse.error.message,
+        })
+    }
+
+    if (profilesResponse.error) {
+        warnings.push({
+            source: 'profiles',
+            message: profilesResponse.error.message,
+        })
+    }
+
+    if (matchRowsResponse.error) {
+        warnings.push({
+            source: 'conversion',
+            message: matchRowsResponse.error.message,
+        })
+    }
+
+    const latestRun = latestRunResponse.error
+        ? null
+        : ((latestRunResponse.data ?? null) as LatestRun | null)
+
+    const jobs24h = jobs24hResponse.error ? 0 : jobs24hResponse.count ?? 0
+    const profilesCount = profilesResponse.error ? 0 : profilesResponse.count ?? 0
+
+    const matchRows = matchRowsResponse.error
+        ? []
+        : ((matchRowsResponse.data ?? []) as JobMatchRow[])
 
     const keys = matchRows
         .map((row) => {
@@ -210,9 +247,14 @@ async function getDashboardData() {
             .in('job_id', uniqueJobIds)
             .in('profile_id', uniqueProfileIds)
 
-        if (appError) throw new Error(appError.message)
-
-        applications = (appData ?? []) as JobApplicationRow[]
+        if (appError) {
+            warnings.push({
+                source: 'applications',
+                message: appError.message,
+            })
+        } else {
+            applications = (appData ?? []) as JobApplicationRow[]
+        }
     }
 
     const appMap = new Map<string, JobApplicationRow>()
@@ -223,10 +265,8 @@ async function getDashboardData() {
 
     const conversion = {
         matches: 0,
-        saved: 0,
         applied: 0,
         interview: 0,
-        rejected: 0,
         offer: 0,
         unassignedCv: 0,
     }
@@ -241,12 +281,21 @@ async function getDashboardData() {
 
         const application = appMap.get(`${job.id}|${profile.id}`)
 
-        if (!application?.cv_variant) conversion.unassignedCv += 1
-        if (application?.status === 'saved') conversion.saved += 1
-        if (application?.status === 'applied') conversion.applied += 1
-        if (application?.status === 'interview') conversion.interview += 1
-        if (application?.status === 'rejected') conversion.rejected += 1
-        if (application?.status === 'offer') conversion.offer += 1
+        if (!application?.cv_variant) {
+            conversion.unassignedCv += 1
+        }
+
+        if (application?.status === 'applied') {
+            conversion.applied += 1
+        }
+
+        if (application?.status === 'interview') {
+            conversion.interview += 1
+        }
+
+        if (application?.status === 'offer') {
+            conversion.offer += 1
+        }
     }
 
     return {
@@ -255,6 +304,7 @@ async function getDashboardData() {
         profilesCount,
         conversion,
         conversionLookbackDays,
+        warnings,
     }
 }
 
@@ -366,6 +416,7 @@ async function DashboardContent() {
         profilesCount,
         conversion,
         conversionLookbackDays,
+        warnings,
     } = await getDashboardData()
 
     const latestRunHealth = latestRun
@@ -435,6 +486,27 @@ async function DashboardContent() {
                 />
                 <KpiCard label="CV sin definir" value={conversion.unassignedCv} />
             </section>
+            {warnings.length > 0 ? (
+                <section className="rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-4">
+                    <p className="text-sm font-medium text-yellow-300">
+                        El dashboard cargó con advertencias
+                    </p>
+
+                    <div className="mt-3 space-y-2">
+                        {warnings.map((warning) => (
+                            <div
+                                key={`${warning.source}-${warning.message}`}
+                                className="rounded-xl bg-neutral-950 p-3 text-sm text-neutral-300"
+                            >
+                                <span className="font-medium text-yellow-300">
+                                    {warning.source}:
+                                </span>{' '}
+                                {warning.message}
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            ) : null}
 
             <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                 <SectionCard
