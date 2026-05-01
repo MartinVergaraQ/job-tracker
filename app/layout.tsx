@@ -1,5 +1,6 @@
+// app/layout.tsx
+
 import type { Metadata } from 'next'
-import type { ReactNode } from 'react'
 import { Geist } from 'next/font/google'
 import { ThemeProvider } from 'next-themes'
 import './globals.css'
@@ -10,27 +11,8 @@ const defaultUrl = process.env.VERCEL_URL
 
 export const metadata: Metadata = {
   metadataBase: new URL(defaultUrl),
-  title: {
-    default: 'Job Tracker Admin',
-    template: '%s | Job Tracker',
-  },
-  description:
-    'Panel inteligente para recolectar empleos, medir matches, seguir postulaciones y automatizar alertas laborales.',
-  applicationName: 'Job Tracker',
-  authors: [{ name: 'Job Tracker' }],
-  creator: 'Job Tracker',
-  openGraph: {
-    title: 'Job Tracker Admin',
-    description:
-      'Panel inteligente para recolectar empleos, medir matches, seguir postulaciones y automatizar alertas laborales.',
-    url: defaultUrl,
-    siteName: 'Job Tracker',
-    type: 'website',
-  },
-  robots: {
-    index: false,
-    follow: false,
-  },
+  title: 'Job Tracker Admin',
+  description: 'Panel personal para buscar trabajo, medir matches y automatizar postulaciones.',
 }
 
 const geistSans = Geist({
@@ -42,18 +24,18 @@ const geistSans = Geist({
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: ReactNode
+  children: React.ReactNode
 }>) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistSans.className} antialiased`}>
+      <body className={`${geistSans.className} min-h-screen bg-background text-foreground antialiased`}>
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"
-          enableSystem={false}
+          enableSystem
           disableTransitionOnChange
         >
-          <div className="app-shell">{children}</div>
+          {children}
         </ThemeProvider>
       </body>
     </html>
