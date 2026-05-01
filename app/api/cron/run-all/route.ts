@@ -41,9 +41,10 @@ function validateCronAuth(request: NextRequest): NextResponse | null {
 }
 
 function getBaseUrl(request: NextRequest) {
+    const isProduction = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production'
     const envUrl = process.env.NEXT_PUBLIC_APP_URL?.trim()
 
-    if (envUrl) {
+    if (isProduction && envUrl) {
         return envUrl.replace(/\/$/, '')
     }
 
