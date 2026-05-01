@@ -1,18 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { collectJobs } from '@/app/features/jobs/adapters/services/collect-jobs'
-import {
-    logScrapeRun,
-    type CollectResult,
-} from '@/lib/monitoring/log-scrape-run'
-import { notifyRunHealthChange } from '@/lib/monitoring/notify-run-health-change'
-import { getRunHealthFromCollectResult } from '@/lib/monitoring/run-health'
-import { markDuplicateJobs } from '@/lib/jobs/mark-duplicate-jobs'
+import { runCollectJob } from '@/lib/jobs/run-collect-job'
 
-type DedupeResult = {
-    scanned: number
-    canonical_jobs: number
-    duplicates_marked: number
-}
+export const maxDuration = 300
 
 function getExpectedSecret() {
     return process.env.CRON_SECRET ?? process.env.INTERNAL_API_SECRET ?? null
@@ -52,98 +41,11 @@ async function handleCollect(request: NextRequest): Promise<Response> {
         return authError
     }
 
-    const startedAt = new Date()
+    const result = await runCollectJob()
 
-    try {
-        const result: CollectResult = await collectJobs()
-
-        let dedupe: DedupeResult | null = null
-        let dedupeError: string | null = null
-
-        try {
-            dedupe = await markDuplicateJobs()
-        } catch (error) {
-            dedupeError =
-                error instanceof Error ? error.message : 'Unknown dedupe error'
-
-            console.error('markDuplicateJobs error:', error)
-        }
-
-        const finishedAt = new Date()
-
-        let runId: string | null = null
-
-        try {
-            const logResult = await logScrapeRun({
-                status: 'success',
-                startedAt,
-                finishedAt,
-                result,
-            })
-
-            runId = logResult.runId
-        } catch (logError) {
-            console.error('logScrapeRun success error:', logError)
-        }
-
-        if (runId) {
-            try {
-                await notifyRunHealthChange({
-                    currentRunId: runId,
-                    currentHealth: getRunHealthFromCollectResult(result),
-                    result,
-                })
-            } catch (notifyError) {
-                console.error('notifyRunHealthChange success error:', notifyError)
-            }
-        }
-
-        return NextResponse.json({
-            ok: true,
-            result,
-            dedupe,
-            dedupe_error: dedupeError,
-        })
-    } catch (error) {
-        const finishedAt = new Date()
-        const message =
-            error instanceof Error ? error.message : 'Unknown error'
-
-        let runId: string | null = null
-
-        try {
-            const logResult = await logScrapeRun({
-                status: 'error',
-                startedAt,
-                finishedAt,
-                errorMessage: message,
-            })
-
-            runId = logResult.runId
-        } catch (logError) {
-            console.error('logScrapeRun error path failed:', logError)
-        }
-
-        if (runId) {
-            try {
-                await notifyRunHealthChange({
-                    currentRunId: runId,
-                    currentHealth: 'error',
-                    errorMessage: message,
-                })
-            } catch (notifyError) {
-                console.error('notifyRunHealthChange error path failed:', notifyError)
-            }
-        }
-
-        return NextResponse.json(
-            {
-                ok: false,
-                error: message,
-            },
-            { status: 500 }
-        )
-    }
+    return NextResponse.json(result, {
+        status: result.ok ? 200 : 500,
+    })
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
