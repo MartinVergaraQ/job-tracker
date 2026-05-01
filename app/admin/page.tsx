@@ -3,7 +3,7 @@ import { Suspense, type ReactNode } from 'react'
 import { connection } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getRunHealthFromPersistedRun } from '@/lib/monitoring/run-health'
-
+import { RunPipelineButton } from './run-pipeline-button'
 
 type DashboardWarning = {
     source: string
@@ -428,6 +428,7 @@ async function DashboardContent() {
 
     return (
         <div className="space-y-6">
+            <RunPipelineButton />
             <section className="overflow-hidden rounded-3xl border bg-gradient-to-br from-neutral-950 via-neutral-950 to-neutral-900 p-8">
                 <div className="flex flex-wrap items-start justify-between gap-6">
                     <div>
