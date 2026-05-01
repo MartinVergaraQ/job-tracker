@@ -43,3 +43,6 @@ next-env.d.ts
 
 storage/
 tmp/
+
+.vercel
+.env*.local
