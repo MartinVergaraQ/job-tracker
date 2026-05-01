@@ -12,7 +12,7 @@ const defaultUrl = process.env.VERCEL_URL
 export const metadata: Metadata = {
   metadataBase: new URL(defaultUrl),
   title: 'Job Tracker Admin',
-  description: 'Panel personal para buscar trabajo, medir matches y automatizar postulaciones.',
+  description: 'Panel para recolectar ofertas, medir matches y gestionar postulaciones.',
 }
 
 const geistSans = Geist({
