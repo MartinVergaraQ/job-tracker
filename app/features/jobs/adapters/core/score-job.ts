@@ -6,137 +6,106 @@ export type JobScoreResult = {
     reasons: string[]
 }
 
-function normalizeText(value: string | null | undefined) {
-    return (value ?? '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\w\s.+#-]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-}
+const SENIOR_PATTERNS = [
+    /\bsenior\b/i,
+    /\bsr\b/i,
+    /\bsemi senior\b/i,
+    /\bsemi-senior\b/i,
+    /\bssr\b/i,
+    /\blead\b/i,
+    /\btech lead\b/i,
+    /\bprincipal\b/i,
+    /\bstaff\b/i,
+    /\barchitect\b/i,
+    /\barquitecto\b/i,
+    /\bjef[ea]\b/i,
+    /\bhead\b/i,
+    /\bmanager\b/i,
+    /\bcoordinador\b/i,
+    /\bespecialista\b/i,
+]
+
+const JUNIOR_PATTERNS = [
+    /\bjunior\b/i,
+    /\bjr\b/i,
+    /\btrainee\b/i,
+    /\bpracticante\b/i,
+    /\bentry level\b/i,
+    /\bsin experiencia\b/i,
+]
+
+const YEARS_PATTERNS = [
+    /(\d+)\s*\+?\s*años/i,
+    /(\d+)\s*\+?\s*years/i,
+    /experiencia\s*(?:de)?\s*(\d+)/i,
+]
 
 function buildHaystack(job: NormalizedJob) {
-    return normalizeText(
-        [
-            job.title,
-            job.company,
-            job.location,
-            job.description,
-            ...(job.tech_tags ?? []),
-            job.modality,
-            job.seniority,
-        ]
-            .filter(Boolean)
-            .join(' ')
-    )
+    return [
+        job.title,
+        job.company,
+        job.location,
+        job.description,
+        ...(job.tech_tags ?? []),
+        job.modality,
+        job.seniority,
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
 }
 
-function includesTerm(haystack: string, term: string) {
-    const normalizedTerm = normalizeText(term)
-
-    if (!normalizedTerm) return false
-
-    return haystack.includes(normalizedTerm)
+function textMatchesAny(text: string, patterns: RegExp[]) {
+    return patterns.some((pattern) => pattern.test(text))
 }
 
-function titleHasAny(job: NormalizedJob, terms: string[]) {
-    const title = normalizeText(job.title)
+function getRequiredYears(text: string) {
+    for (const pattern of YEARS_PATTERNS) {
+        const match = text.match(pattern)
 
-    return terms.some((term) => includesTerm(title, term))
+        if (!match?.[1]) continue
+
+        const years = Number(match[1])
+
+        if (Number.isFinite(years)) {
+            return years
+        }
+    }
+
+    return null
 }
 
-function haystackHasAny(haystack: string, terms: string[]) {
-    return terms.some((term) => includesTerm(haystack, term))
-}
+function profileWantsJunior(profile: SearchProfile) {
+    return profile.preferred_seniority.some((level) => {
+        const normalized = level.toLowerCase()
 
-function clampScore(score: number) {
-    if (score < 0) return 0
-    if (score > 100) return 100
-    return score
-}
-
-const SENIOR_TERMS = [
-    'senior',
-    'sr',
-    'lead',
-    'lider',
-    'principal',
-    'staff',
-    'architect',
-    'arquitecto',
-    'jefe',
-    'head',
-    'manager',
-    'tech lead',
-]
-
-const JUNIOR_TERMS = [
-    'junior',
-    'jr',
-    'trainee',
-    'practica',
-    'practicante',
-    'entry level',
-    'sin experiencia',
-    'egresado',
-]
-
-const BACKEND_ROLE_TERMS = [
-    'backend',
-    'back end',
-    'desarrollador backend',
-    'developer backend',
-    'api',
-    'apis',
-    'rest',
-]
-
-const FULLSTACK_ROLE_TERMS = [
-    'fullstack',
-    'full stack',
-    'desarrollador full stack',
-    'desarrollador fullstack',
-]
-
-const FRONTEND_ROLE_TERMS = [
-    'frontend',
-    'front end',
-    'react',
-    'next',
-    'next.js',
-    'nextjs',
-]
-
-const CORE_TECH_TERMS = [
-    'node',
-    'node.js',
-    'typescript',
-    'javascript',
-    'sql',
-    'postgres',
-    'mysql',
-    'mongodb',
-    'react',
-    'next',
-    'next.js',
-    'nextjs',
-    'express',
-    'nestjs',
-]
-
-function profilePrefersJunior(profile: SearchProfile) {
-    return profile.preferred_seniority.some((item) => {
-        const value = normalizeText(item)
-        return value === 'junior' || value === 'trainee'
+        return (
+            normalized === 'junior' ||
+            normalized === 'trainee' ||
+            normalized.includes('junior') ||
+            normalized.includes('trainee')
+        )
     })
 }
 
 function profileAllowsSenior(profile: SearchProfile) {
-    return profile.preferred_seniority.some((item) => {
-        const value = normalizeText(item)
-        return value === 'senior' || value === 'semi-senior'
+    return profile.preferred_seniority.some((level) => {
+        const normalized = level.toLowerCase()
+
+        return (
+            normalized === 'senior' ||
+            normalized === 'semi-senior' ||
+            normalized.includes('senior') ||
+            normalized.includes('lead') ||
+            normalized.includes('staff')
+        )
     })
+}
+
+function profileAllowsSeniority(profile: SearchProfile, seniority: string) {
+    return profile.preferred_seniority.some(
+        (level) => level.toLowerCase() === seniority.toLowerCase()
+    )
 }
 
 export function scoreJob(
@@ -144,83 +113,74 @@ export function scoreJob(
     profile: SearchProfile
 ): JobScoreResult {
     const haystack = buildHaystack(job)
+
     let score = 0
     const reasons: string[] = []
 
-    const prefersJunior = profilePrefersJunior(profile)
+    const wantsJunior = profileWantsJunior(profile)
     const allowsSenior = profileAllowsSenior(profile)
 
-    const hasSeniorInTitle = titleHasAny(job, SENIOR_TERMS)
-    const hasJuniorInTitle = titleHasAny(job, JUNIOR_TERMS)
+    const hasSeniorText = textMatchesAny(haystack, SENIOR_PATTERNS)
+    const hasJuniorText = textMatchesAny(haystack, JUNIOR_PATTERNS)
+    const requiredYears = getRequiredYears(haystack)
 
-    if (prefersJunior && hasSeniorInTitle && !allowsSenior) {
-        score -= 45
-        reasons.push('Castigo fuerte: cargo parece Senior/Lead')
+    /**
+     * Filtro fuerte:
+     * Si el perfil es junior y la oferta claramente es Senior/Lead/Staff,
+     * la bajamos fuerte aunque tenga muchas keywords técnicas.
+     */
+    if (wantsJunior && !allowsSenior) {
+        if (job.seniority === 'senior' || hasSeniorText) {
+            score -= 80
+            reasons.push('Penalización fuerte: oferta Senior/Lead para perfil Junior')
+        }
+
+        if (requiredYears !== null && requiredYears >= 4) {
+            score -= 40
+            reasons.push(`Penalización: pide ${requiredYears}+ años de experiencia`)
+        }
+
+        if (requiredYears !== null && requiredYears >= 6) {
+            score -= 30
+            reasons.push(`Penalización fuerte: pide ${requiredYears}+ años`)
+        }
     }
 
-    if (prefersJunior && hasJuniorInTitle) {
-        score += 22
-        reasons.push('Cargo alineado a Junior/Trainee')
-    }
-
-    if (
-        job.seniority !== 'unknown' &&
-        profile.preferred_seniority.some(
-            (level) => normalizeText(level) === normalizeText(job.seniority)
-        )
-    ) {
-        score += 15
-        reasons.push(`Seniority compatible: ${job.seniority}`)
-    }
-
-    if (hasSeniorInTitle && job.seniority === 'senior' && prefersJunior && !allowsSenior) {
-        score -= 20
-        reasons.push('Seniority detectada como senior')
-    }
-
-    const hasBackendRole = haystackHasAny(haystack, BACKEND_ROLE_TERMS)
-    const hasFullstackRole = haystackHasAny(haystack, FULLSTACK_ROLE_TERMS)
-    const hasFrontendRole = haystackHasAny(haystack, FRONTEND_ROLE_TERMS)
-    const hasCoreTech = haystackHasAny(haystack, CORE_TECH_TERMS)
-
-    if (hasBackendRole) {
-        score += 18
-        reasons.push('Rol relacionado a Backend')
-    }
-
-    if (hasFullstackRole) {
-        score += 14
-        reasons.push('Rol relacionado a Full Stack')
-    }
-
-    if (hasFrontendRole) {
-        score += 8
-        reasons.push('Tiene tecnologías Frontend útiles')
-    }
-
-    if (hasCoreTech) {
-        score += 12
-        reasons.push('Tiene tecnologías principales del perfil')
-    }
-
-    let includeHits = 0
-
+    /**
+     * Keywords positivas.
+     */
     for (const keyword of profile.include_keywords) {
-        if (includesTerm(haystack, keyword)) {
-            includeHits += 1
+        const kw = keyword.trim().toLowerCase()
+
+        if (kw && haystack.includes(kw)) {
+            score += 12
             reasons.push(`Coincide con "${keyword}"`)
         }
     }
 
-    score += Math.min(includeHits * 6, 30)
-
+    /**
+     * Keywords excluyentes.
+     */
     for (const keyword of profile.exclude_keywords) {
-        if (includesTerm(haystack, keyword)) {
+        const kw = keyword.trim().toLowerCase()
+
+        if (kw && haystack.includes(kw)) {
             score -= 35
             reasons.push(`Contiene excluyente "${keyword}"`)
         }
     }
 
+    /**
+     * Bonus si la oferta dice junior/trainee y el perfil busca junior.
+     */
+    if (wantsJunior && hasJuniorText) {
+        score += 25
+        reasons.push('Señal positiva: oferta Junior/Trainee')
+    }
+
+    /**
+     * Modalidad.
+     */
     if (
         job.modality !== 'unknown' &&
         profile.preferred_modalities.includes(job.modality)
@@ -229,28 +189,58 @@ export function scoreJob(
         reasons.push(`Modalidad preferida: ${job.modality}`)
     }
 
-    const location = normalizeText(job.location)
+    /**
+     * Ubicación.
+     */
+    const location = (job.location ?? '').toLowerCase()
 
     if (
         location &&
         profile.preferred_locations.some((pref) =>
-            location.includes(normalizeText(pref))
+            location.includes(pref.toLowerCase())
         )
     ) {
         score += 8
         reasons.push('Ubicación alineada')
     }
 
-    if (!hasBackendRole && !hasFullstackRole && !hasCoreTech) {
-        score -= 25
-        reasons.push('No parece rol técnico alineado')
+    /**
+     * Seniority.
+     */
+    if (job.seniority !== 'unknown') {
+        if (profileAllowsSeniority(profile, job.seniority)) {
+            score += 15
+            reasons.push(`Seniority compatible: ${job.seniority}`)
+        } else {
+            score -= 35
+            reasons.push(`Seniority no preferida: ${job.seniority}`)
+        }
     }
 
-    const finalScore = clampScore(score)
+    /**
+     * Regla final de seguridad:
+     * aunque haya muchas keywords, una oferta senior no debe pasar
+     * para un perfil junior.
+     */
+    if (wantsJunior && !allowsSenior && (job.seniority === 'senior' || hasSeniorText)) {
+        return {
+            score,
+            is_match: false,
+            reasons,
+        }
+    }
+
+    if (wantsJunior && requiredYears !== null && requiredYears >= 5) {
+        return {
+            score,
+            is_match: false,
+            reasons,
+        }
+    }
 
     return {
-        score: finalScore,
-        is_match: finalScore >= profile.min_score,
-        reasons: reasons.slice(0, 10),
+        score,
+        is_match: score >= profile.min_score,
+        reasons,
     }
 }
