@@ -2,8 +2,8 @@ import { Suspense } from 'react'
 import Link from 'next/link'
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
-    saveJobApplicationNotes,
-    saveJobApplicationCvVariant,
+    updateApplicationNotes as saveJobApplicationNotes,
+    updateApplicationCvVariant as saveJobApplicationCvVariant,
     setJobApplicationStatus,
 } from './actions'
 

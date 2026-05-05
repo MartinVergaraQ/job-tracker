@@ -41,10 +41,10 @@ function validateCronAuth(request: NextRequest): NextResponse | null {
 }
 
 function getBaseUrl(request: NextRequest) {
-    const isProduction = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production'
+    const isVercel = process.env.VERCEL === '1'
     const envUrl = process.env.NEXT_PUBLIC_APP_URL?.trim()
 
-    if (isProduction && envUrl) {
+    if (isVercel && envUrl) {
         return envUrl.replace(/\/$/, '')
     }
 
@@ -91,7 +91,10 @@ async function callInternalEndpoint(params: {
             status: 500,
             body: {
                 ok: false,
-                error: error instanceof Error ? error.message : 'Unknown internal fetch error',
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : 'Unknown internal fetch error',
             },
         }
     }

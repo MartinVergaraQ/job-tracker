@@ -3,224 +3,182 @@
 import { revalidatePath } from 'next/cache'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-const VALID_STATUSES = new Set([
-    'saved',
-    'applied',
-    'interview',
-    'rejected',
-    'offer',
-] as const)
+type ApplicationStatus = 'saved' | 'applied' | 'interview' | 'rejected' | 'offer'
 
-const VALID_CV_VARIANTS = new Set([
-    'backend-jr',
-    'fullstack-jr',
-    'frontend-react',
-    'administrativo',
-    'ventas-atencion',
-    'general',
-] as const)
+function getRequiredString(formData: FormData, key: string) {
+    const value = String(formData.get(key) ?? '').trim()
 
-type ApplicationStatus =
-    | 'saved'
-    | 'applied'
-    | 'interview'
-    | 'rejected'
-    | 'offer'
+    if (!value) {
+        throw new Error(`Missing ${key}`)
+    }
 
-type CvVariant =
-    | 'backend-jr'
-    | 'fullstack-jr'
-    | 'frontend-react'
-    | 'administrativo'
-    | 'ventas-atencion'
-    | 'general'
-
-function isValidStatus(value: string): value is ApplicationStatus {
-    return VALID_STATUSES.has(value as ApplicationStatus)
+    return value
 }
 
-function isValidCvVariant(value: string): value is CvVariant {
-    return VALID_CV_VARIANTS.has(value as CvVariant)
+function getOptionalString(formData: FormData, key: string) {
+    const value = String(formData.get(key) ?? '').trim()
+    return value.length > 0 ? value : null
 }
 
-async function getExistingApplication(params: {
+function getStatus(value: string): ApplicationStatus {
+    const allowed: ApplicationStatus[] = [
+        'saved',
+        'applied',
+        'interview',
+        'rejected',
+        'offer',
+    ]
+
+    if (!allowed.includes(value as ApplicationStatus)) {
+        throw new Error('Invalid application status')
+    }
+
+    return value as ApplicationStatus
+}
+
+function revalidateJobViews(jobId?: string, profileId?: string) {
+    revalidatePath('/admin')
+    revalidatePath('/admin/today')
+    revalidatePath('/admin/conversion')
+    revalidatePath('/admin/top-matches')
+
+    if (jobId && profileId) {
+        revalidatePath(`/admin/top-matches/${jobId}/${profileId}`)
+    }
+}
+
+async function upsertApplication(params: {
     jobId: string
     profileId: string
+    status?: ApplicationStatus
+    cvVariant?: string | null
+    notes?: string | null
+    followUpAt?: string | null
+    clearFollowUp?: boolean
 }) {
     const supabase = createAdminClient()
+    const now = new Date().toISOString()
 
-    const { data, error } = await supabase
+    const payload: Record<string, unknown> = {
+        job_id: params.jobId,
+        profile_id: params.profileId,
+        updated_at: now,
+    }
+
+    if (params.status) {
+        payload.status = params.status
+
+        if (params.status === 'applied') {
+            payload.applied_at = now
+        }
+    }
+
+    if ('cvVariant' in params) {
+        payload.cv_variant = params.cvVariant
+    }
+
+    if ('notes' in params) {
+        payload.notes = params.notes
+    }
+
+    if ('followUpAt' in params) {
+        payload.follow_up_at = params.followUpAt
+    }
+
+    if (params.clearFollowUp) {
+        payload.follow_up_at = null
+    }
+
+    const { error } = await supabase
         .from('job_applications')
-        .select('id, status, applied_at, follow_up_at, notes, cv_variant')
-        .eq('job_id', params.jobId)
-        .eq('profile_id', params.profileId)
-        .maybeSingle()
+        .upsert(payload, {
+            onConflict: 'job_id,profile_id',
+            ignoreDuplicates: false,
+        })
 
     if (error) {
         throw new Error(error.message)
     }
 
-    return data
-}
-
-function getDefaultFollowUpDate() {
-    return new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString()
-}
-
-function revalidateTopMatchesPages() {
-    revalidatePath('/admin/top-matches')
-    revalidatePath('/admin/jobs')
-    revalidatePath('/admin')
-    revalidatePath('/admin/today')
+    revalidateJobViews(params.jobId, params.profileId)
 }
 
 export async function setJobApplicationStatus(formData: FormData) {
-    const jobId = String(formData.get('job_id') ?? '').trim()
-    const profileId = String(formData.get('profile_id') ?? '').trim()
-    const status = String(formData.get('status') ?? '').trim()
+    const jobId = getRequiredString(formData, 'job_id')
+    const profileId = getRequiredString(formData, 'profile_id')
+    const status = getStatus(getRequiredString(formData, 'status'))
 
-    if (!jobId || !profileId || !isValidStatus(status)) {
-        throw new Error('Invalid application payload')
-    }
-
-    const supabase = createAdminClient()
-    const existing = await getExistingApplication({ jobId, profileId })
-    const now = new Date().toISOString()
-
-    const appliedAt =
-        status === 'applied'
-            ? existing?.applied_at ?? now
-            : existing?.applied_at ?? null
-
-    const followUpAt =
-        status === 'applied'
-            ? existing?.follow_up_at ?? getDefaultFollowUpDate()
-            : existing?.follow_up_at ?? null
-
-    if (!existing) {
-        const { error } = await supabase.from('job_applications').insert({
-            job_id: jobId,
-            profile_id: profileId,
-            status,
-            applied_at: appliedAt,
-            follow_up_at: followUpAt,
-            notes: null,
-            cv_variant: null,
-            updated_at: now,
-        })
-
-        if (error) {
-            throw new Error(error.message)
-        }
-    } else {
-        const { error } = await supabase
-            .from('job_applications')
-            .update({
-                status,
-                applied_at: appliedAt,
-                follow_up_at: followUpAt,
-                updated_at: now,
-            })
-            .eq('id', existing.id)
-
-        if (error) {
-            throw new Error(error.message)
-        }
-    }
-
-    revalidateTopMatchesPages()
+    await upsertApplication({
+        jobId,
+        profileId,
+        status,
+    })
 }
 
-export async function saveJobApplicationNotes(formData: FormData) {
-    const jobId = String(formData.get('job_id') ?? '').trim()
-    const profileId = String(formData.get('profile_id') ?? '').trim()
-    const notes = String(formData.get('notes') ?? '').trim()
+export async function updateApplicationCvVariant(formData: FormData) {
+    const jobId = getRequiredString(formData, 'job_id')
+    const profileId = getRequiredString(formData, 'profile_id')
+    const cvVariant = getOptionalString(formData, 'cv_variant')
 
-    if (!jobId || !profileId) {
-        throw new Error('Invalid notes payload')
-    }
-
-    const supabase = createAdminClient()
-    const existing = await getExistingApplication({ jobId, profileId })
-    const now = new Date().toISOString()
-
-    if (!existing) {
-        const { error } = await supabase.from('job_applications').insert({
-            job_id: jobId,
-            profile_id: profileId,
-            status: 'saved',
-            applied_at: null,
-            follow_up_at: null,
-            notes: notes || null,
-            cv_variant: null,
-            updated_at: now,
-        })
-
-        if (error) {
-            throw new Error(error.message)
-        }
-    } else {
-        const { error } = await supabase
-            .from('job_applications')
-            .update({
-                notes: notes || null,
-                updated_at: now,
-            })
-            .eq('id', existing.id)
-
-        if (error) {
-            throw new Error(error.message)
-        }
-    }
-
-    revalidateTopMatchesPages()
+    await upsertApplication({
+        jobId,
+        profileId,
+        cvVariant,
+    })
 }
 
-export async function saveJobApplicationCvVariant(formData: FormData) {
-    const jobId = String(formData.get('job_id') ?? '').trim()
-    const profileId = String(formData.get('profile_id') ?? '').trim()
-    const cvVariant = String(formData.get('cv_variant') ?? '').trim()
+export async function updateApplicationNotes(formData: FormData) {
+    const jobId = getRequiredString(formData, 'job_id')
+    const profileId = getRequiredString(formData, 'profile_id')
+    const notes = getOptionalString(formData, 'notes')
 
-    if (!jobId || !profileId) {
-        throw new Error('Invalid CV variant payload')
-    }
+    await upsertApplication({
+        jobId,
+        profileId,
+        notes,
+    })
+}
 
-    if (cvVariant && !isValidCvVariant(cvVariant)) {
-        throw new Error('Invalid CV variant')
-    }
+export async function saveRecommendedApplicationKit(formData: FormData) {
+    const jobId = getRequiredString(formData, 'job_id')
+    const profileId = getRequiredString(formData, 'profile_id')
+    const cvVariant = getOptionalString(formData, 'cv_variant')
+    const notes = getOptionalString(formData, 'notes')
 
-    const supabase = createAdminClient()
-    const existing = await getExistingApplication({ jobId, profileId })
-    const now = new Date().toISOString()
+    await upsertApplication({
+        jobId,
+        profileId,
+        status: 'saved',
+        cvVariant,
+        notes,
+    })
+}
 
-    if (!existing) {
-        const { error } = await supabase.from('job_applications').insert({
-            job_id: jobId,
-            profile_id: profileId,
-            status: 'saved',
-            applied_at: null,
-            follow_up_at: null,
-            notes: null,
-            cv_variant: cvVariant || null,
-            updated_at: now,
-        })
+export async function scheduleApplicationFollowUp(formData: FormData) {
+    const jobId = getRequiredString(formData, 'job_id')
+    const profileId = getRequiredString(formData, 'profile_id')
+    const days = Number(formData.get('days') ?? 5)
 
-        if (error) {
-            throw new Error(error.message)
-        }
-    } else {
-        const { error } = await supabase
-            .from('job_applications')
-            .update({
-                cv_variant: cvVariant || null,
-                updated_at: now,
-            })
-            .eq('id', existing.id)
+    const safeDays = Number.isFinite(days) && days > 0 ? days : 5
 
-        if (error) {
-            throw new Error(error.message)
-        }
-    }
+    const followUpAt = new Date(
+        Date.now() + safeDays * 24 * 60 * 60 * 1000
+    ).toISOString()
 
-    revalidateTopMatchesPages()
+    await upsertApplication({
+        jobId,
+        profileId,
+        followUpAt,
+    })
+}
+
+export async function clearApplicationFollowUp(formData: FormData) {
+    const jobId = getRequiredString(formData, 'job_id')
+    const profileId = getRequiredString(formData, 'profile_id')
+
+    await upsertApplication({
+        jobId,
+        profileId,
+        clearFollowUp: true,
+    })
 }
