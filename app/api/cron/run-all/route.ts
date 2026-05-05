@@ -9,15 +9,20 @@ type InternalCallResult = {
     body: unknown
 }
 
-function getExpectedSecret() {
-    return process.env.CRON_SECRET ?? process.env.INTERNAL_API_SECRET ?? null
+function getAllowedSecrets() {
+    return [
+        process.env.CRON_SECRET,
+        process.env.INTERNAL_API_SECRET,
+    ]
+        .map((value) => value?.trim())
+        .filter(Boolean) as string[]
 }
 
 function validateCronAuth(request: NextRequest): NextResponse | null {
     const authHeader = request.headers.get('authorization')
-    const expectedSecret = getExpectedSecret()
+    const allowedSecrets = getAllowedSecrets()
 
-    if (!expectedSecret) {
+    if (allowedSecrets.length === 0) {
         return NextResponse.json(
             {
                 ok: false,
@@ -27,7 +32,11 @@ function validateCronAuth(request: NextRequest): NextResponse | null {
         )
     }
 
-    if (authHeader !== `Bearer ${expectedSecret}`) {
+    const isAuthorized = allowedSecrets.some(
+        (secret) => authHeader === `Bearer ${secret}`
+    )
+
+    if (!isAuthorized) {
         return NextResponse.json(
             {
                 ok: false,
@@ -55,7 +64,7 @@ async function callInternalEndpoint(params: {
     baseUrl: string
     path: string
 }): Promise<InternalCallResult> {
-    const internalSecret = process.env.INTERNAL_API_SECRET
+    const internalSecret = process.env.INTERNAL_API_SECRET?.trim()
 
     if (!internalSecret) {
         return {
