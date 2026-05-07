@@ -34,7 +34,15 @@ export async function GET(request: NextRequest): Promise<Response> {
             body: [
                 '✅ Job Tracker conectado con WhatsApp.',
                 '',
-                'Próximo paso: enviarte los mejores matches por acá.',
+                'Próximo paso:',
+                'enviarte los mejores matches por acá.',
+                '',
+                'Comandos futuros:',
+                'run',
+                'matches',
+                'match 1',
+                'postular 1',
+                'descartar 1',
             ].join('\n'),
         })
 

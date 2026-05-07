@@ -1,34 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { sendTelegramMessage } from '@/lib/notifications/telegram'
+import { notifyJobMatchWhatsApp } from '@/lib/notifications/notify-job-match-whatsapp'
 import { sendEmailNotification } from '@/lib/notifications/email'
 import {
-    markNotificationSent,
     shouldSendNotification,
+    markNotificationSent,
 } from '@/lib/notifications/job-match-notifications'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
-type NotificationChannel = 'telegram' | 'email'
-// hola
-type SearchProfileRow = {
-    id: string
-    name: string
-    slug: string
-    is_active: boolean
-    notification_channel: NotificationChannel | null
-    telegram_chat_id: string | null
-    notification_email: string | null
-}
+type NotificationChannel = 'whatsapp' | 'email'
 
 type JobRow = {
     id: string
+    source_name: string
+    source_type: string
+    url: string
     title: string
-    company: string | null
+    company: string
     location: string | null
-    url: string | null
-    source_name: string | null
+    modality: string
+    seniority: string
+    salary_text: string | null
+    description: string | null
+    tech_tags: string[]
     published_at: string | null
+    scraped_at: string
+    is_active: boolean
+    is_canonical: boolean
+}
+
+type SearchProfileRow = {
+    id: string
+    slug: string
+    name: string
+    min_score: number
+    is_active: boolean
+    notification_channel: string | null
+    telegram_chat_id: string | null
+    notification_email: string | null
 }
 
 type JobMatchRow = {
@@ -36,9 +46,12 @@ type JobMatchRow = {
     job_id: string
     profile_id: string
     score: number
-    reasons: string[] | null
     is_match: boolean
+    reasons: string[]
     notified_at: string | null
+    dismissed: boolean
+    saved: boolean
+    created_at: string
     jobs: JobRow | JobRow[] | null
     search_profiles: SearchProfileRow | SearchProfileRow[] | null
 }
@@ -48,74 +61,73 @@ type NotificationTarget = {
     recipient: string
 }
 
-function getEnvNumber(name: string, fallback: number) {
-    const raw = process.env[name]
-    const value = Number(raw ?? fallback)
-
-    return Number.isFinite(value) && value > 0 ? value : fallback
+function getAllowedSecrets() {
+    return [process.env.CRON_SECRET, process.env.INTERNAL_API_SECRET]
+        .map((value) => value?.trim())
+        .filter(Boolean) as string[]
 }
 
-const NOTIFICATION_MIN_SCORE = getEnvNumber('NOTIFICATION_MIN_SCORE', 60)
+function validateInternalAuth(request: NextRequest): NextResponse | null {
+    const authHeader = request.headers.get('authorization')
+    const allowedSecrets = getAllowedSecrets()
 
-const NOTIFICATION_MAX_PER_PROFILE = getEnvNumber(
-    'NOTIFICATION_MAX_PER_PROFILE',
-    5
-)
-
-const NOTIFICATION_LOOKBACK_HOURS = getEnvNumber(
-    'NOTIFICATION_LOOKBACK_HOURS',
-    getEnvNumber('TOP_MATCHES_LOOKBACK_HOURS', 72)
-)
-
-function getRelationObject<T>(value: T | T[] | null): T | null {
-    if (Array.isArray(value)) {
-        return value[0] ?? null
+    if (allowedSecrets.length === 0) {
+        return NextResponse.json(
+            {
+                ok: false,
+                error: 'Missing CRON_SECRET or INTERNAL_API_SECRET',
+            },
+            { status: 500 }
+        )
     }
 
-    return value ?? null
+    const isAuthorized = allowedSecrets.some(
+        (secret) => authHeader === `Bearer ${secret}`
+    )
+
+    if (!isAuthorized) {
+        return NextResponse.json(
+            {
+                ok: false,
+                error: 'Unauthorized',
+            },
+            { status: 401 }
+        )
+    }
+
+    return null
 }
 
 function normalizeString(value: string | null | undefined) {
-    const normalized = value?.trim() ?? ''
-    return normalized.length > 0 ? normalized : null
+    const normalized = value?.trim()
+    return normalized && normalized.length > 0 ? normalized : null
 }
 
-function getPublishedAtTime(job: JobRow | null) {
-    if (!job?.published_at) return 0
-
-    const time = new Date(job.published_at).getTime()
-
-    return Number.isNaN(time) ? 0 : time
+function normalizeArrayRelation<T>(value: T | T[] | null | undefined): T | null {
+    if (!value) return null
+    if (Array.isArray(value)) return value[0] ?? null
+    return value
 }
 
-function sortRows(rows: JobMatchRow[]) {
-    return [...rows].sort((a, b) => {
-        if (b.score !== a.score) {
-            return b.score - a.score
-        }
+function getNumberEnv(name: string, fallback: number) {
+    const raw = Number(process.env[name] ?? fallback)
 
-        const aJob = getRelationObject(a.jobs)
-        const bJob = getRelationObject(b.jobs)
+    if (!Number.isFinite(raw)) {
+        return fallback
+    }
 
-        return getPublishedAtTime(bJob) - getPublishedAtTime(aJob)
-    })
+    return raw
 }
 
 function resolveNotificationTarget(
     profile: SearchProfileRow
 ): NotificationTarget | null {
-    const telegramChatId = normalizeString(profile.telegram_chat_id)
+    const whatsappTo = normalizeString(process.env.WHATSAPP_TO)
     const email = normalizeString(profile.notification_email)
 
-    if (profile.notification_channel === 'telegram') {
-        if (!telegramChatId) return null
-
-        return {
-            channel: 'telegram',
-            recipient: telegramChatId,
-        }
-    }
-
+    /**
+     * Si el perfil pide email explícitamente, respetamos email.
+     */
     if (profile.notification_channel === 'email') {
         if (!email) return null
 
@@ -125,15 +137,32 @@ function resolveNotificationTarget(
         }
     }
 
-    // Fallback senior:
-    // si notification_channel viene null, usamos lo que exista.
-    if (telegramChatId) {
+    /**
+     * Si el perfil pide WhatsApp explícitamente, usamos WHATSAPP_TO global.
+     * Por ahora no tienes whatsapp_to en BD, así que usamos env.
+     */
+    if (profile.notification_channel === 'whatsapp') {
+        if (!whatsappTo) return null
+
         return {
-            channel: 'telegram',
-            recipient: telegramChatId,
+            channel: 'whatsapp',
+            recipient: whatsappTo,
         }
     }
 
+    /**
+     * Si viene telegram/null/otro valor, usamos WhatsApp como canal principal.
+     */
+    if (whatsappTo) {
+        return {
+            channel: 'whatsapp',
+            recipient: whatsappTo,
+        }
+    }
+
+    /**
+     * Fallback opcional a email.
+     */
     if (email) {
         return {
             channel: 'email',
@@ -144,38 +173,39 @@ function resolveNotificationTarget(
     return null
 }
 
-function escapeHtml(value: string | null | undefined) {
-    return (value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;')
-}
-
-function buildTelegramText(
+function buildWhatsAppText(
     match: JobMatchRow,
     job: JobRow,
     profile: SearchProfileRow
 ) {
-    const reasons = (match.reasons ?? []).slice(0, 6)
+    const reasons = (match.reasons ?? []).slice(0, 5)
+    const techTags = (job.tech_tags ?? []).slice(0, 8)
 
     return [
-        `Nuevo match para: ${profile.name}`,
-        ``,
+        `🎯 Nuevo match para ${profile.name}`,
+        '',
         `Cargo: ${job.title}`,
-        `Empresa: ${job.company ?? 'Sin empresa'}`,
-        `Ubicación: ${job.location ?? 'Sin ubicación'}`,
-        `Fuente: ${job.source_name ?? 'Sin fuente'}`,
+        `Empresa: ${job.company}`,
+        job.location ? `Ubicación: ${job.location}` : null,
+        job.modality ? `Modalidad: ${job.modality}` : null,
+        job.seniority ? `Senioridad: ${job.seniority}` : null,
+        job.salary_text ? `Sueldo: ${job.salary_text}` : null,
         `Score: ${match.score}`,
-        ``,
-        `Motivos:`,
-        ...(reasons.length
-            ? reasons.map((reason) => `- ${reason}`)
-            : ['- Sin razones detalladas']),
-        ``,
-        `Link: ${job.url ?? 'Sin link'}`,
-    ].join('\n')
+        '',
+        techTags.length > 0 ? `Tags: ${techTags.join(', ')}` : null,
+        '',
+        reasons.length > 0 ? 'Por qué calza:' : null,
+        ...reasons.map((reason) => `• ${reason}`),
+        '',
+        `Link: ${job.url}`,
+        '',
+        'Acciones sugeridas:',
+        `match ${match.id}`,
+        `postular ${match.id}`,
+        `descartar ${match.id}`,
+    ]
+        .filter(Boolean)
+        .join('\n')
 }
 
 function buildEmailContent(
@@ -183,212 +213,206 @@ function buildEmailContent(
     job: JobRow,
     profile: SearchProfileRow
 ) {
-    const reasons = (match.reasons ?? []).slice(0, 6)
+    const reasons = (match.reasons ?? []).slice(0, 8)
 
-    const subject = `Nuevo trabajo para ${profile.name}: ${job.title}`
+    const subject = `Nuevo match ${match.score}: ${job.title} en ${job.company}`
 
     const text = [
-        `Hola,`,
-        ``,
-        `Encontramos un nuevo trabajo que hace match con el perfil: ${profile.name}`,
-        ``,
+        `Nuevo match para ${profile.name}`,
+        '',
         `Cargo: ${job.title}`,
-        `Empresa: ${job.company ?? 'Sin empresa'}`,
-        `Ubicación: ${job.location ?? 'Sin ubicación'}`,
-        `Fuente: ${job.source_name ?? 'Sin fuente'}`,
+        `Empresa: ${job.company}`,
+        job.location ? `Ubicación: ${job.location}` : null,
+        job.modality ? `Modalidad: ${job.modality}` : null,
+        job.seniority ? `Senioridad: ${job.seniority}` : null,
+        job.salary_text ? `Sueldo: ${job.salary_text}` : null,
         `Score: ${match.score}`,
-        ``,
-        `Motivos:`,
-        ...(reasons.length
-            ? reasons.map((reason) => `- ${reason}`)
-            : ['- Sin razones detalladas']),
-        ``,
-        `Link: ${job.url ?? 'Sin link'}`,
-    ].join('\n')
-
-    const safeProfileName = escapeHtml(profile.name)
-    const safeTitle = escapeHtml(job.title)
-    const safeCompany = escapeHtml(job.company ?? 'Sin empresa')
-    const safeLocation = escapeHtml(job.location ?? 'Sin ubicación')
-    const safeSource = escapeHtml(job.source_name ?? 'Sin fuente')
-    const safeUrl = escapeHtml(job.url ?? '#')
+        '',
+        reasons.length > 0 ? 'Por qué calza:' : null,
+        ...reasons.map((reason) => `- ${reason}`),
+        '',
+        `Link: ${job.url}`,
+    ]
+        .filter(Boolean)
+        .join('\n')
 
     const html = `
-        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-            <h2>Nuevo trabajo para ${safeProfileName}</h2>
-            <p>Encontramos un nuevo trabajo que hace match con este perfil.</p>
+    <div>
+      <h2>Nuevo match para ${profile.name}</h2>
 
+      <p><strong>Cargo:</strong> ${job.title}</p>
+      <p><strong>Empresa:</strong> ${job.company}</p>
+      ${job.location ? `<p><strong>Ubicación:</strong> ${job.location}</p>` : ''}
+      ${job.modality ? `<p><strong>Modalidad:</strong> ${job.modality}</p>` : ''}
+      ${job.seniority ? `<p><strong>Senioridad:</strong> ${job.seniority}</p>` : ''}
+      ${job.salary_text ? `<p><strong>Sueldo:</strong> ${job.salary_text}</p>` : ''}
+      <p><strong>Score:</strong> ${match.score}</p>
+
+      ${reasons.length > 0
+            ? `
+            <h3>Por qué calza</h3>
             <ul>
-                <li><strong>Cargo:</strong> ${safeTitle}</li>
-                <li><strong>Empresa:</strong> ${safeCompany}</li>
-                <li><strong>Ubicación:</strong> ${safeLocation}</li>
-                <li><strong>Fuente:</strong> ${safeSource}</li>
-                <li><strong>Score:</strong> ${match.score}</li>
+              ${reasons.map((reason) => `<li>${reason}</li>`).join('')}
             </ul>
-
-            <p><strong>Motivos:</strong></p>
-
-            <ul>
-                ${reasons.length
-            ? reasons
-                .map((reason) => `<li>${escapeHtml(reason)}</li>`)
-                .join('')
-            : '<li>Sin razones detalladas</li>'
+          `
+            : ''
         }
-            </ul>
 
-            <p>
-                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">
-                    Ver oferta
-                </a>
-            </p>
-        </div>
-    `
+      <p>
+        <a href="${job.url}" target="_blank" rel="noopener noreferrer">
+          Ver oferta
+        </a>
+      </p>
+    </div>
+  `
 
-    return { subject, text, html }
+    return {
+        subject,
+        text,
+        html,
+    }
 }
 
-export async function POST(request: NextRequest) {
-    const authHeader = request.headers.get('authorization')
-    const internalSecret = process.env.INTERNAL_API_SECRET
-
-    if (!internalSecret) {
-        return NextResponse.json(
-            { ok: false, error: 'Missing INTERNAL_API_SECRET' },
-            { status: 500 }
-        )
-    }
-
-    if (authHeader !== `Bearer ${internalSecret}`) {
-        return NextResponse.json(
-            { ok: false, error: 'Unauthorized' },
-            { status: 401 }
-        )
-    }
-
+async function processNotifications() {
     const supabase = createAdminClient()
 
-    const since = new Date(
-        Date.now() - NOTIFICATION_LOOKBACK_HOURS * 60 * 60 * 1000
-    ).toISOString()
+    const minScore = getNumberEnv('NOTIFICATIONS_MIN_SCORE', 70)
+    const maxPerRun = getNumberEnv('NOTIFICATIONS_MAX_PER_RUN', 10)
+    const maxPerProfile = getNumberEnv('NOTIFICATIONS_MAX_PER_PROFILE', 5)
 
     const { data, error } = await supabase
         .from('job_matches')
         .select(`
-            id,
-            job_id,
-            profile_id,
-            score,
-            reasons,
-            is_match,
-            notified_at,
-            jobs!inner (
-                id,
-                title,
-                company,
-                location,
-                url,
-                source_name,
-                published_at
-            ),
-            search_profiles!inner (
-                id,
-                name,
-                slug,
-                is_active,
-                notification_channel,
-                telegram_chat_id,
-                notification_email
-            )
-        `)
+      id,
+      job_id,
+      profile_id,
+      score,
+      is_match,
+      reasons,
+      notified_at,
+      dismissed,
+      saved,
+      created_at,
+      jobs (
+        id,
+        source_name,
+        source_type,
+        url,
+        title,
+        company,
+        location,
+        modality,
+        seniority,
+        salary_text,
+        description,
+        tech_tags,
+        published_at,
+        scraped_at,
+        is_active,
+        is_canonical
+      ),
+      search_profiles (
+        id,
+        slug,
+        name,
+        min_score,
+        is_active,
+        notification_channel,
+        telegram_chat_id,
+        notification_email
+      )
+    `)
         .eq('is_match', true)
-        .gte('score', NOTIFICATION_MIN_SCORE)
-        .gte('jobs.published_at', since)
-        .eq('search_profiles.is_active', true)
+        .eq('dismissed', false)
+        .gte('score', minScore)
         .order('score', { ascending: false })
-        .limit(300)
+        .order('created_at', { ascending: false })
+        .limit(maxPerRun * 5)
 
     if (error) {
-        return NextResponse.json(
-            { ok: false, error: error.message },
-            { status: 500 }
-        )
+        throw new Error(error.message)
     }
 
-    const rows = sortRows((data ?? []) as unknown as JobMatchRow[])
+    const rows = (data ?? []) as JobMatchRow[]
 
-    console.log('[notifications] raw candidates', {
-        minScore: NOTIFICATION_MIN_SCORE,
-        maxPerProfile: NOTIFICATION_MAX_PER_PROFILE,
-        lookbackHours: NOTIFICATION_LOOKBACK_HOURS,
-        since,
-        total: rows.length,
-        sample: rows.slice(0, 5).map((row) => {
-            const job = getRelationObject(row.jobs)
-            const profile = getRelationObject(row.search_profiles)
-
-            return {
-                match_id: row.id,
-                score: row.score,
-                title: job?.title,
-                source: job?.source_name,
-                published_at: job?.published_at,
-                profile: profile?.name,
-                channel: profile?.notification_channel,
-                telegram: Boolean(normalizeString(profile?.telegram_chat_id)),
-                email: Boolean(normalizeString(profile?.notification_email)),
-            }
-        }),
-    })
+    const sent: unknown[] = []
+    const skipped: unknown[] = []
+    const failures: unknown[] = []
+    const selectedIds: string[] = []
+    const sentIds: string[] = []
 
     const countByProfile = new Map<string, number>()
 
-    const sentIds: string[] = []
-    const selectedIds: string[] = []
-
-    const sent: Array<{
-        matchId: string
-        jobId: string
-        profileId: string
-        channel: NotificationChannel
-        recipient: string
-        score: number
-    }> = []
-
-    const skipped: Array<{
-        matchId: string
-        reason: string
-    }> = []
-
-    const failures: Array<{
-        matchId: string
-        error: string
-    }> = []
-
     for (const row of rows) {
-        const job = getRelationObject(row.jobs)
-        const profile = getRelationObject(row.search_profiles)
+        const job = normalizeArrayRelation(row.jobs)
+        const profile = normalizeArrayRelation(row.search_profiles)
 
-        if (!job || !profile) {
+        if (!job) {
             skipped.push({
                 matchId: row.id,
-                reason: 'missing_relation',
+                reason: 'missing_job',
             })
             continue
         }
 
-        if (!row.is_match) {
+        if (!profile) {
             skipped.push({
                 matchId: row.id,
-                reason: 'not_match',
+                reason: 'missing_profile',
             })
             continue
         }
 
-        if (row.score < NOTIFICATION_MIN_SCORE) {
+        if (!profile.is_active) {
             skipped.push({
                 matchId: row.id,
-                reason: 'score_too_low',
+                jobId: row.job_id,
+                profileId: row.profile_id,
+                reason: 'inactive_profile',
+            })
+            continue
+        }
+
+        if (!job.is_active) {
+            skipped.push({
+                matchId: row.id,
+                jobId: row.job_id,
+                profileId: row.profile_id,
+                reason: 'inactive_job',
+            })
+            continue
+        }
+
+        if (job.is_canonical === false) {
+            skipped.push({
+                matchId: row.id,
+                jobId: row.job_id,
+                profileId: row.profile_id,
+                reason: 'non_canonical_job',
+            })
+            continue
+        }
+
+        if (row.score < profile.min_score) {
+            skipped.push({
+                matchId: row.id,
+                jobId: row.job_id,
+                profileId: row.profile_id,
+                score: row.score,
+                profileMinScore: profile.min_score,
+                reason: 'below_profile_min_score',
+            })
+            continue
+        }
+
+        const currentProfileCount = countByProfile.get(profile.id) ?? 0
+
+        if (currentProfileCount >= maxPerProfile) {
+            skipped.push({
+                matchId: row.id,
+                jobId: row.job_id,
+                profileId: row.profile_id,
+                reason: 'profile_limit_reached',
             })
             continue
         }
@@ -398,51 +422,71 @@ export async function POST(request: NextRequest) {
         if (!target) {
             skipped.push({
                 matchId: row.id,
-                reason: 'missing_recipient',
-            })
-            continue
-        }
-
-        const currentProfileCount = countByProfile.get(profile.id) ?? 0
-
-        if (currentProfileCount >= NOTIFICATION_MAX_PER_PROFILE) {
-            skipped.push({
-                matchId: row.id,
-                reason: 'profile_limit_reached',
+                jobId: row.job_id,
+                profileId: row.profile_id,
+                reason: 'missing_notification_target',
+                profileChannel: profile.notification_channel,
             })
             continue
         }
 
         try {
-            const decision = await shouldSendNotification({
-                jobId: row.job_id,
-                profileId: row.profile_id,
-                channel: target.channel,
-                recipient: target.recipient,
-                currentScore: row.score,
-            })
+            let wasSent = false
 
-            if (!decision.shouldSend) {
-                skipped.push({
-                    matchId: row.id,
-                    reason: decision.reason,
+            if (target.channel === 'whatsapp') {
+                const body = buildWhatsAppText(row, job, profile)
+
+                const result = await notifyJobMatchWhatsApp({
+                    jobId: row.job_id,
+                    profileId: row.profile_id,
+                    recipient: target.recipient,
+                    score: row.score,
+                    body,
                 })
-                continue
-            }
 
-            selectedIds.push(row.id)
-            countByProfile.set(profile.id, currentProfileCount + 1)
+                if (!result.sent) {
+                    skipped.push({
+                        matchId: row.id,
+                        jobId: row.job_id,
+                        profileId: row.profile_id,
+                        channel: target.channel,
+                        recipient: target.recipient,
+                        score: row.score,
+                        reason: result.reason,
+                        previousScore: result.previousScore,
+                        currentScore: result.currentScore,
+                    })
 
-            if (target.channel === 'telegram') {
-                const text = buildTelegramText(row, job, profile)
+                    continue
+                }
 
-                await sendTelegramMessage({
-                    chatId: target.recipient,
-                    text,
-                })
+                wasSent = true
             }
 
             if (target.channel === 'email') {
+                const decision = await shouldSendNotification({
+                    jobId: row.job_id,
+                    profileId: row.profile_id,
+                    channel: 'email',
+                    recipient: target.recipient,
+                    currentScore: row.score,
+                })
+
+                if (!decision.shouldSend) {
+                    skipped.push({
+                        matchId: row.id,
+                        jobId: row.job_id,
+                        profileId: row.profile_id,
+                        channel: target.channel,
+                        recipient: target.recipient,
+                        score: row.score,
+                        reason: decision.reason,
+                        previousScore: decision.previousScore,
+                    })
+
+                    continue
+                }
+
                 const { subject, text, html } = buildEmailContent(row, job, profile)
 
                 await sendEmailNotification({
@@ -451,17 +495,33 @@ export async function POST(request: NextRequest) {
                     text,
                     html,
                 })
+
+                await markNotificationSent({
+                    jobId: row.job_id,
+                    profileId: row.profile_id,
+                    channel: 'email',
+                    recipient: target.recipient,
+                    currentScore: row.score,
+                })
+
+                wasSent = true
             }
 
-            await markNotificationSent({
-                jobId: row.job_id,
-                profileId: row.profile_id,
-                channel: target.channel,
-                recipient: target.recipient,
-                currentScore: row.score,
-            })
+            if (!wasSent) {
+                skipped.push({
+                    matchId: row.id,
+                    jobId: row.job_id,
+                    profileId: row.profile_id,
+                    channel: target.channel,
+                    reason: 'unsupported_channel',
+                })
 
+                continue
+            }
+
+            selectedIds.push(row.id)
             sentIds.push(row.id)
+            countByProfile.set(profile.id, currentProfileCount + 1)
 
             sent.push({
                 matchId: row.id,
@@ -471,57 +531,91 @@ export async function POST(request: NextRequest) {
                 recipient: target.recipient,
                 score: row.score,
             })
-        } catch (err) {
+        } catch (error) {
             failures.push({
                 matchId: row.id,
-                error:
-                    err instanceof Error
-                        ? err.message
-                        : 'Unknown notification error',
+                jobId: row.job_id,
+                profileId: row.profile_id,
+                channel: target.channel,
+                recipient: target.recipient,
+                error: error instanceof Error ? error.message : 'Unknown send error',
             })
         }
     }
 
     if (sentIds.length > 0) {
+        const now = new Date().toISOString()
+
         const { error: updateError } = await supabase
             .from('job_matches')
             .update({
-                notified_at: new Date().toISOString(),
+                notified_at: now,
             })
             .in('id', sentIds)
 
         if (updateError) {
-            return NextResponse.json(
-                {
-                    ok: false,
-                    error: updateError.message,
-                    scanned: rows.length,
-                    selected: selectedIds.length,
-                    sent: sentIds.length,
-                    failures,
-                    config: {
-                        min_score: NOTIFICATION_MIN_SCORE,
-                        max_per_profile: NOTIFICATION_MAX_PER_PROFILE,
-                        lookback_hours: NOTIFICATION_LOOKBACK_HOURS,
-                    },
-                },
-                { status: 500 }
-            )
+            failures.push({
+                step: 'update_job_matches_notified_at',
+                error: updateError.message,
+            })
         }
     }
 
-    return NextResponse.json({
-        ok: true,
+    return {
+        ok: failures.length === 0,
         scanned: rows.length,
         selected: selectedIds.length,
-        sent: sentIds.length,
+        sent: sent.length,
         failures,
-        skipped: skipped.slice(0, 30),
-        sent_details: sent,
+        skipped,
         config: {
-            min_score: NOTIFICATION_MIN_SCORE,
-            max_per_profile: NOTIFICATION_MAX_PER_PROFILE,
-            lookback_hours: NOTIFICATION_LOOKBACK_HOURS,
+            minScore,
+            maxPerRun,
+            maxPerProfile,
+            whatsappConfigured: Boolean(normalizeString(process.env.WHATSAPP_TO)),
         },
-    })
+    }
+}
+
+async function handleProcessNotifications(request: NextRequest): Promise<Response> {
+    const authError = validateInternalAuth(request)
+
+    if (authError) {
+        return authError
+    }
+
+    try {
+        const result = await processNotifications()
+
+        return NextResponse.json(result, {
+            status: result.ok ? 200 : 500,
+        })
+    } catch (error) {
+        return NextResponse.json(
+            {
+                ok: false,
+                scanned: 0,
+                selected: 0,
+                sent: 0,
+                failures: [
+                    {
+                        error:
+                            error instanceof Error
+                                ? error.message
+                                : 'Unknown notification process error',
+                    },
+                ],
+                skipped: [],
+            },
+            { status: 500 }
+        )
+    }
+}
+
+export async function POST(request: NextRequest): Promise<Response> {
+    return handleProcessNotifications(request)
+}
+
+export async function GET(request: NextRequest): Promise<Response> {
+    return handleProcessNotifications(request)
 }
