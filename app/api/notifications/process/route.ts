@@ -1,33 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { notifyJobMatchWhatsApp } from '@/lib/notifications/notify-job-match-whatsapp'
-import { sendEmailNotification } from '@/lib/notifications/email'
-import {
-    shouldSendNotification,
-    markNotificationSent,
-} from '@/lib/notifications/job-match-notifications'
+import { sendWhatsAppMessage } from '@/lib/notifications/send-whatsapp-message'
 
 export const maxDuration = 300
-
-type NotificationChannel = 'whatsapp' | 'email'
 
 type JobRow = {
     id: string
     source_name: string
-    source_type: string
+    source_type?: string | null
     url: string
     title: string
     company: string
     location: string | null
-    modality: string
-    seniority: string
+    modality: string | null
+    seniority: string | null
     salary_text: string | null
-    description: string | null
-    tech_tags: string[]
+    tech_tags: string[] | null
     published_at: string | null
-    scraped_at: string
-    is_active: boolean
-    is_canonical: boolean
+    is_active: boolean | null
+    is_canonical: boolean | null
 }
 
 type SearchProfileRow = {
@@ -37,8 +28,10 @@ type SearchProfileRow = {
     min_score: number
     is_active: boolean
     notification_channel: string | null
-    telegram_chat_id: string | null
     notification_email: string | null
+    telegram_chat_id: string | null
+    whatsapp_recipient: string | null
+    notifications_enabled: boolean | null
 }
 
 type JobMatchRow = {
@@ -47,7 +40,7 @@ type JobMatchRow = {
     profile_id: string
     score: number
     is_match: boolean
-    reasons: string[]
+    reasons: string[] | null
     notified_at: string | null
     dismissed: boolean
     saved: boolean
@@ -56,9 +49,12 @@ type JobMatchRow = {
     search_profiles: SearchProfileRow | SearchProfileRow[] | null
 }
 
-type NotificationTarget = {
-    channel: NotificationChannel
+type SelectedMatch = {
+    itemNumber: number
     recipient: string
+    match: JobMatchRow
+    job: JobRow
+    profile: SearchProfileRow
 }
 
 function getAllowedSecrets() {
@@ -98,250 +94,256 @@ function validateInternalAuth(request: NextRequest): NextResponse | null {
     return null
 }
 
-function normalizeString(value: string | null | undefined) {
-    const normalized = value?.trim()
-    return normalized && normalized.length > 0 ? normalized : null
-}
-
 function normalizeArrayRelation<T>(value: T | T[] | null | undefined): T | null {
     if (!value) return null
     if (Array.isArray(value)) return value[0] ?? null
     return value
 }
 
-function getNumberEnv(name: string, fallback: number) {
-    const raw = Number(process.env[name] ?? fallback)
+function getNumberEnv(names: string[], fallback: number) {
+    for (const name of names) {
+        const value = process.env[name]
 
-    if (!Number.isFinite(raw)) {
-        return fallback
+        if (value === undefined) continue
+
+        const parsed = Number(value)
+
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return Math.floor(parsed)
+        }
     }
 
-    return raw
+    return fallback
 }
 
-function resolveNotificationTarget(
-    profile: SearchProfileRow
-): NotificationTarget | null {
-    const whatsappTo = normalizeString(process.env.WHATSAPP_TO)
-    const email = normalizeString(profile.notification_email)
+function normalizeWhatsAppRecipient(value: string) {
+    const clean = value.trim().replace(/\s+/g, '')
 
-    /**
-     * Si el perfil pide email explícitamente, respetamos email.
-     */
-    if (profile.notification_channel === 'email') {
-        if (!email) return null
+    if (!clean) return null
 
-        return {
-            channel: 'email',
-            recipient: email,
-        }
+    if (clean.startsWith('whatsapp:')) {
+        return clean
     }
 
-    /**
-     * Si el perfil pide WhatsApp explícitamente, usamos WHATSAPP_TO global.
-     * Por ahora no tienes whatsapp_to en BD, así que usamos env.
-     */
-    if (profile.notification_channel === 'whatsapp') {
-        if (!whatsappTo) return null
-
-        return {
-            channel: 'whatsapp',
-            recipient: whatsappTo,
-        }
+    if (clean.startsWith('+')) {
+        return `whatsapp:${clean}`
     }
 
-    /**
-     * Si viene telegram/null/otro valor, usamos WhatsApp como canal principal.
-     */
-    if (whatsappTo) {
-        return {
-            channel: 'whatsapp',
-            recipient: whatsappTo,
-        }
-    }
-
-    /**
-     * Fallback opcional a email.
-     */
-    if (email) {
-        return {
-            channel: 'email',
-            recipient: email,
-        }
-    }
-
-    return null
+    return `whatsapp:+${clean.replace(/^\+/, '')}`
 }
 
-function buildWhatsAppText(
-    match: JobMatchRow,
-    job: JobRow,
-    profile: SearchProfileRow
-) {
-    const reasons = (match.reasons ?? []).slice(0, 5)
-    const techTags = (job.tech_tags ?? []).slice(0, 8)
+function getProfileWhatsAppRecipient(profile: SearchProfileRow) {
+    if (!profile.whatsapp_recipient) return null
+    return normalizeWhatsAppRecipient(profile.whatsapp_recipient)
+}
+
+function truncate(value: string, maxLength: number) {
+    if (value.length <= maxLength) return value
+    return `${value.slice(0, maxLength - 1)}…`
+}
+
+function formatJobLine(selected: SelectedMatch) {
+    const { itemNumber, match, job, profile } = selected
+
+    const location = job.location ? ` · ${job.location}` : ''
+    const modality =
+        job.modality && job.modality !== 'unknown' ? ` · ${job.modality}` : ''
 
     return [
-        `🎯 Nuevo match para ${profile.name}`,
-        '',
-        `Cargo: ${job.title}`,
-        `Empresa: ${job.company}`,
-        job.location ? `Ubicación: ${job.location}` : null,
-        job.modality ? `Modalidad: ${job.modality}` : null,
-        job.seniority ? `Senioridad: ${job.seniority}` : null,
-        job.salary_text ? `Sueldo: ${job.salary_text}` : null,
-        `Score: ${match.score}`,
-        '',
-        techTags.length > 0 ? `Tags: ${techTags.join(', ')}` : null,
-        '',
-        reasons.length > 0 ? 'Por qué calza:' : null,
-        ...reasons.map((reason) => `• ${reason}`),
-        '',
-        `Link: ${job.url}`,
-        '',
-        'Acciones sugeridas:',
-        `match ${match.id}`,
-        `postular ${match.id}`,
-        `descartar ${match.id}`,
-    ]
-        .filter(Boolean)
-        .join('\n')
+        `${itemNumber}. ${job.title}`,
+        `   ${job.company}${location}${modality}`,
+        `   Score ${Math.round(match.score)} · Perfil: ${profile.name}`,
+    ].join('\n')
 }
 
-function buildEmailContent(
-    match: JobMatchRow,
-    job: JobRow,
-    profile: SearchProfileRow
-) {
-    const reasons = (match.reasons ?? []).slice(0, 8)
+function buildSummaryMessage(selected: SelectedMatch[]) {
+    const lines = selected.map(formatJobLine)
 
-    const subject = `Nuevo match ${match.score}: ${job.title} en ${job.company}`
+    return truncate(
+        [
+            `🚀 Encontré ${selected.length} matches buenos para revisar`,
+            '',
+            ...lines,
+            '',
+            'Responde con:',
+            'match 1 → ver detalle',
+            'preparar 1 → generar pack de postulación',
+            'descartar 1 → descartar oferta',
+            'aplicado 1 → marcar como postulada',
+        ].join('\n'),
+        3500
+    )
+}
 
-    const text = [
-        `Nuevo match para ${profile.name}`,
-        '',
-        `Cargo: ${job.title}`,
-        `Empresa: ${job.company}`,
-        job.location ? `Ubicación: ${job.location}` : null,
-        job.modality ? `Modalidad: ${job.modality}` : null,
-        job.seniority ? `Senioridad: ${job.seniority}` : null,
-        job.salary_text ? `Sueldo: ${job.salary_text}` : null,
-        `Score: ${match.score}`,
-        '',
-        reasons.length > 0 ? 'Por qué calza:' : null,
-        ...reasons.map((reason) => `- ${reason}`),
-        '',
-        `Link: ${job.url}`,
-    ]
-        .filter(Boolean)
-        .join('\n')
+function sortRows(rows: JobMatchRow[]) {
+    return [...rows].sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    })
+}
 
-    const html = `
-    <div>
-      <h2>Nuevo match para ${profile.name}</h2>
+function uniqueByProfileAndJob(rows: JobMatchRow[]) {
+    const seen = new Set<string>()
+    const result: JobMatchRow[] = []
 
-      <p><strong>Cargo:</strong> ${job.title}</p>
-      <p><strong>Empresa:</strong> ${job.company}</p>
-      ${job.location ? `<p><strong>Ubicación:</strong> ${job.location}</p>` : ''}
-      ${job.modality ? `<p><strong>Modalidad:</strong> ${job.modality}</p>` : ''}
-      ${job.seniority ? `<p><strong>Senioridad:</strong> ${job.seniority}</p>` : ''}
-      ${job.salary_text ? `<p><strong>Sueldo:</strong> ${job.salary_text}</p>` : ''}
-      <p><strong>Score:</strong> ${match.score}</p>
+    for (const row of rows) {
+        const key = `${row.profile_id}:${row.job_id}`
 
-      ${reasons.length > 0
-            ? `
-            <h3>Por qué calza</h3>
-            <ul>
-              ${reasons.map((reason) => `<li>${reason}</li>`).join('')}
-            </ul>
-          `
-            : ''
-        }
+        if (seen.has(key)) continue
 
-      <p>
-        <a href="${job.url}" target="_blank" rel="noopener noreferrer">
-          Ver oferta
-        </a>
-      </p>
-    </div>
-  `
+        seen.add(key)
+        result.push(row)
+    }
 
-    return {
-        subject,
-        text,
-        html,
+    return result
+}
+
+function groupByRecipient(selected: Omit<SelectedMatch, 'itemNumber'>[]) {
+    const groups = new Map<string, Omit<SelectedMatch, 'itemNumber'>[]>()
+
+    for (const item of selected) {
+        const current = groups.get(item.recipient) ?? []
+        current.push(item)
+        groups.set(item.recipient, current)
+    }
+
+    return groups
+}
+
+async function createMatchSession(params: {
+    recipient: string
+    selected: SelectedMatch[]
+}) {
+    const supabase = createAdminClient()
+    const firstProfileId = params.selected[0]?.profile.id ?? null
+
+    await supabase
+        .from('whatsapp_match_sessions')
+        .update({ status: 'expired' })
+        .eq('recipient', params.recipient)
+        .eq('status', 'active')
+
+    const { data: session, error: sessionError } = await supabase
+        .from('whatsapp_match_sessions')
+        .insert({
+            recipient: params.recipient,
+            profile_id: firstProfileId,
+            status: 'active',
+        })
+        .select('id')
+        .single()
+
+    if (sessionError) {
+        throw new Error(sessionError.message)
+    }
+
+    const items = params.selected.map(({ itemNumber, match, job, profile }) => ({
+        session_id: session.id,
+        item_number: itemNumber,
+        match_id: match.id,
+        job_id: job.id,
+        profile_id: profile.id,
+    }))
+
+    const { error: itemsError } = await supabase
+        .from('whatsapp_match_session_items')
+        .insert(items)
+
+    if (itemsError) {
+        throw new Error(itemsError.message)
+    }
+
+    return session.id as string
+}
+
+async function markMatchesNotified(matchIds: string[]) {
+    if (matchIds.length === 0) return
+
+    const supabase = createAdminClient()
+
+    const { error } = await supabase
+        .from('job_matches')
+        .update({
+            notified_at: new Date().toISOString(),
+        })
+        .in('id', matchIds)
+
+    if (error) {
+        throw new Error(error.message)
     }
 }
 
 async function processNotifications() {
     const supabase = createAdminClient()
 
-    const minScore = getNumberEnv('NOTIFICATIONS_MIN_SCORE', 70)
-    const maxPerRun = getNumberEnv('NOTIFICATIONS_MAX_PER_RUN', 10)
-    const maxPerProfile = getNumberEnv('NOTIFICATIONS_MAX_PER_PROFILE', 5)
+    const minScore = getNumberEnv(
+        ['NOTIFICATIONS_MIN_SCORE', 'NOTIFICATION_MIN_SCORE'],
+        75
+    )
+
+    const topMatchesPerRecipient = getNumberEnv(
+        ['NOTIFICATIONS_TOP_MATCHES', 'NOTIFICATION_TOP_MATCHES'],
+        5
+    )
 
     const { data, error } = await supabase
         .from('job_matches')
         .select(`
-      id,
-      job_id,
-      profile_id,
-      score,
-      is_match,
-      reasons,
-      notified_at,
-      dismissed,
-      saved,
-      created_at,
-      jobs (
-        id,
-        source_name,
-        source_type,
-        url,
-        title,
-        company,
-        location,
-        modality,
-        seniority,
-        salary_text,
-        description,
-        tech_tags,
-        published_at,
-        scraped_at,
-        is_active,
-        is_canonical
-      ),
-      search_profiles (
-        id,
-        slug,
-        name,
-        min_score,
-        is_active,
-        notification_channel,
-        telegram_chat_id,
-        notification_email
-      )
-    `)
+            id,
+            job_id,
+            profile_id,
+            score,
+            is_match,
+            reasons,
+            notified_at,
+            dismissed,
+            saved,
+            created_at,
+            jobs (
+                id,
+                source_name,
+                source_type,
+                url,
+                title,
+                company,
+                location,
+                modality,
+                seniority,
+                salary_text,
+                tech_tags,
+                published_at,
+                is_active,
+                is_canonical
+            ),
+            search_profiles (
+                id,
+                slug,
+                name,
+                min_score,
+                is_active,
+                notification_channel,
+                notification_email,
+                telegram_chat_id,
+                whatsapp_recipient,
+                notifications_enabled
+            )
+        `)
         .eq('is_match', true)
         .eq('dismissed', false)
+        .is('notified_at', null)
         .gte('score', minScore)
         .order('score', { ascending: false })
         .order('created_at', { ascending: false })
-        .limit(maxPerRun * 5)
+        .limit(100)
 
     if (error) {
         throw new Error(error.message)
     }
 
-    const rows = (data ?? []) as JobMatchRow[]
+    const rows = uniqueByProfileAndJob(sortRows((data ?? []) as JobMatchRow[]))
 
-    const sent: unknown[] = []
     const skipped: unknown[] = []
-    const failures: unknown[] = []
-    const selectedIds: string[] = []
-    const sentIds: string[] = []
-
-    const countByProfile = new Map<string, number>()
+    const candidates: Omit<SelectedMatch, 'itemNumber'>[] = []
 
     for (const row of rows) {
         const job = normalizeArrayRelation(row.jobs)
@@ -350,6 +352,7 @@ async function processNotifications() {
         if (!job) {
             skipped.push({
                 matchId: row.id,
+                profileId: row.profile_id,
                 reason: 'missing_job',
             })
             continue
@@ -358,6 +361,7 @@ async function processNotifications() {
         if (!profile) {
             skipped.push({
                 matchId: row.id,
+                profileId: row.profile_id,
                 reason: 'missing_profile',
             })
             continue
@@ -366,18 +370,49 @@ async function processNotifications() {
         if (!profile.is_active) {
             skipped.push({
                 matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
+                profileId: profile.id,
                 reason: 'inactive_profile',
             })
             continue
         }
 
-        if (!job.is_active) {
+        if (!profile.notifications_enabled) {
             skipped.push({
                 matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
+                profileId: profile.id,
+                profileName: profile.name,
+                reason: 'profile_notifications_disabled',
+            })
+            continue
+        }
+
+        if (profile.notification_channel !== 'whatsapp') {
+            skipped.push({
+                matchId: row.id,
+                profileId: profile.id,
+                profileName: profile.name,
+                notificationChannel: profile.notification_channel,
+                reason: 'profile_channel_not_whatsapp',
+            })
+            continue
+        }
+
+        const recipient = getProfileWhatsAppRecipient(profile)
+
+        if (!recipient) {
+            skipped.push({
+                matchId: row.id,
+                profileId: profile.id,
+                profileName: profile.name,
+                reason: 'missing_profile_whatsapp_recipient',
+            })
+            continue
+        }
+
+        if (job.is_active === false) {
+            skipped.push({
+                matchId: row.id,
+                profileId: profile.id,
                 reason: 'inactive_job',
             })
             continue
@@ -386,8 +421,7 @@ async function processNotifications() {
         if (job.is_canonical === false) {
             skipped.push({
                 matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
+                profileId: profile.id,
                 reason: 'non_canonical_job',
             })
             continue
@@ -396,8 +430,7 @@ async function processNotifications() {
         if (row.score < profile.min_score) {
             skipped.push({
                 matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
+                profileId: profile.id,
                 score: row.score,
                 profileMinScore: profile.min_score,
                 reason: 'below_profile_min_score',
@@ -405,174 +438,85 @@ async function processNotifications() {
             continue
         }
 
-        const currentProfileCount = countByProfile.get(profile.id) ?? 0
-
-        if (currentProfileCount >= maxPerProfile) {
-            skipped.push({
-                matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
-                reason: 'profile_limit_reached',
-            })
-            continue
-        }
-
-        const target = resolveNotificationTarget(profile)
-
-        if (!target) {
-            skipped.push({
-                matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
-                reason: 'missing_notification_target',
-                profileChannel: profile.notification_channel,
-            })
-            continue
-        }
-
-        try {
-            let wasSent = false
-
-            if (target.channel === 'whatsapp') {
-                const body = buildWhatsAppText(row, job, profile)
-
-                const result = await notifyJobMatchWhatsApp({
-                    jobId: row.job_id,
-                    profileId: row.profile_id,
-                    recipient: target.recipient,
-                    score: row.score,
-                    body,
-                })
-
-                if (!result.sent) {
-                    skipped.push({
-                        matchId: row.id,
-                        jobId: row.job_id,
-                        profileId: row.profile_id,
-                        channel: target.channel,
-                        recipient: target.recipient,
-                        score: row.score,
-                        reason: result.reason,
-                        previousScore: result.previousScore,
-                        currentScore: result.currentScore,
-                    })
-
-                    continue
-                }
-
-                wasSent = true
-            }
-
-            if (target.channel === 'email') {
-                const decision = await shouldSendNotification({
-                    jobId: row.job_id,
-                    profileId: row.profile_id,
-                    channel: 'email',
-                    recipient: target.recipient,
-                    currentScore: row.score,
-                })
-
-                if (!decision.shouldSend) {
-                    skipped.push({
-                        matchId: row.id,
-                        jobId: row.job_id,
-                        profileId: row.profile_id,
-                        channel: target.channel,
-                        recipient: target.recipient,
-                        score: row.score,
-                        reason: decision.reason,
-                        previousScore: decision.previousScore,
-                    })
-
-                    continue
-                }
-
-                const { subject, text, html } = buildEmailContent(row, job, profile)
-
-                await sendEmailNotification({
-                    to: target.recipient,
-                    subject,
-                    text,
-                    html,
-                })
-
-                await markNotificationSent({
-                    jobId: row.job_id,
-                    profileId: row.profile_id,
-                    channel: 'email',
-                    recipient: target.recipient,
-                    currentScore: row.score,
-                })
-
-                wasSent = true
-            }
-
-            if (!wasSent) {
-                skipped.push({
-                    matchId: row.id,
-                    jobId: row.job_id,
-                    profileId: row.profile_id,
-                    channel: target.channel,
-                    reason: 'unsupported_channel',
-                })
-
-                continue
-            }
-
-            selectedIds.push(row.id)
-            sentIds.push(row.id)
-            countByProfile.set(profile.id, currentProfileCount + 1)
-
-            sent.push({
-                matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
-                channel: target.channel,
-                recipient: target.recipient,
-                score: row.score,
-            })
-        } catch (error) {
-            failures.push({
-                matchId: row.id,
-                jobId: row.job_id,
-                profileId: row.profile_id,
-                channel: target.channel,
-                recipient: target.recipient,
-                error: error instanceof Error ? error.message : 'Unknown send error',
-            })
-        }
+        candidates.push({
+            recipient,
+            match: row,
+            job,
+            profile,
+        })
     }
 
-    if (sentIds.length > 0) {
-        const now = new Date().toISOString()
+    const groups = groupByRecipient(candidates)
 
-        const { error: updateError } = await supabase
-            .from('job_matches')
-            .update({
-                notified_at: now,
-            })
-            .in('id', sentIds)
+    const results: unknown[] = []
+    const notifiedMatchIds: string[] = []
+    let totalSelected = 0
+    let totalSent = 0
 
-        if (updateError) {
-            failures.push({
-                step: 'update_job_matches_notified_at',
-                error: updateError.message,
-            })
-        }
+    for (const [recipient, group] of groups.entries()) {
+        const selected = group
+            .slice(0, topMatchesPerRecipient)
+            .map((item, index) => ({
+                itemNumber: index + 1,
+                ...item,
+            }))
+
+        if (selected.length === 0) continue
+
+        const sessionId = await createMatchSession({
+            recipient,
+            selected,
+        })
+
+        const body = buildSummaryMessage(selected)
+
+        const sendResult = await sendWhatsAppMessage({
+            to: recipient,
+            body,
+        })
+
+        const selectedMatchIds = selected.map(({ match }) => match.id)
+
+        notifiedMatchIds.push(...selectedMatchIds)
+        totalSelected += selected.length
+        totalSent += 1
+
+        results.push({
+            recipient,
+            sessionId,
+            selected: selected.length,
+            sent: true,
+            result: sendResult,
+            matches: selected.map(({ itemNumber, match, job, profile }) => ({
+                itemNumber,
+                matchId: match.id,
+                jobId: job.id,
+                profileId: profile.id,
+                profileName: profile.name,
+                title: job.title,
+                company: job.company,
+                score: match.score,
+            })),
+        })
     }
+
+    await markMatchesNotified(notifiedMatchIds)
 
     return {
-        ok: failures.length === 0,
+        ok: true,
         scanned: rows.length,
-        selected: selectedIds.length,
-        sent: sent.length,
-        failures,
-        skipped,
+        selected: totalSelected,
+        sent: totalSent,
+        results,
+        skipped: skipped.slice(0, 50),
+        message:
+            totalSent > 0
+                ? `Se enviaron ${totalSent} resumen(es) por WhatsApp.`
+                : 'No hay matches nuevos para notificar.',
         config: {
             minScore,
-            maxPerRun,
-            maxPerProfile,
-            whatsappConfigured: Boolean(normalizeString(process.env.WHATSAPP_TO)),
+            topMatchesPerRecipient,
+            groupedByProfileRecipient: true,
         },
     }
 }
