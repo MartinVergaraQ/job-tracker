@@ -164,6 +164,22 @@ type ApplicationPackRow = {
     updated_at: string
 }
 
+type CvProfileRow = {
+    id: string
+    profile_id: string
+    original_filename: string | null
+    raw_text: string
+    summary: string
+    headline: string
+    skills: string[] | null
+    experience: unknown
+    projects: unknown
+    education: unknown
+    languages: unknown
+    parsed_by: string
+    is_active: boolean
+}
+
 function parseMatchCommand(command: string): MatchCommand | null {
     const match = command.match(
         /^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado)\s+(\d+)$/
@@ -523,46 +539,71 @@ function buildFitSummary(item: SessionItemRow) {
     ].join('\n')
 }
 
-function buildCvImprovements(item: SessionItemRow) {
+function buildCvImprovements(item: SessionItemRow, cvProfile: CvProfileRow | null) {
     const job = item.jobs
-    const tags = job?.tech_tags ?? []
+    const jobTags = job?.tech_tags ?? []
+    const cvSkills = cvProfile?.skills ?? []
+
+    const normalizedCvSkills = cvSkills.map((skill) => skill.toLowerCase())
+    const missingFromCv = jobTags.filter(
+        (tag) => !normalizedCvSkills.includes(tag.toLowerCase())
+    )
 
     const improvements = [
-        'Ajustar el resumen profesional para destacar experiencia en desarrollo web full stack/backend.',
-        'Agregar logros concretos con tecnologías relacionadas al cargo.',
-        'Ordenar el stack técnico por relevancia para esta oferta.',
+        'Ajustar el resumen profesional para que mencione el cargo y tecnologías principales de la oferta.',
+        'Agregar 2 o 3 logros concretos relacionados con desarrollo web, APIs, backend o frontend.',
+        'Ordenar el stack técnico poniendo primero las tecnologías que aparecen en la oferta.',
     ]
 
-    if (tags.includes('node') || tags.includes('node.js')) {
-        improvements.push('Destacar experiencia creando APIs REST con Node.js.')
+    if (cvProfile?.headline) {
+        improvements.push(`Usar como base de titular profesional: "${cvProfile.headline}".`)
     }
 
-    if (tags.includes('typescript')) {
-        improvements.push('Mencionar TypeScript en proyectos recientes y responsabilidades.')
+    if (jobTags.some((tag) => ['node', 'node.js', 'nestjs'].includes(tag.toLowerCase()))) {
+        improvements.push('Destacar experiencia creando APIs REST y servicios backend con Node.js/NestJS.')
     }
 
-    if (tags.includes('sql') || tags.includes('postgresql')) {
-        improvements.push('Destacar experiencia con SQL/PostgreSQL y modelado de datos.')
+    if (jobTags.some((tag) => ['react', 'next.js', 'typescript'].includes(tag.toLowerCase()))) {
+        improvements.push('Resaltar experiencia con React/Next.js y TypeScript en proyectos web.')
     }
 
-    if (tags.includes('react') || tags.includes('next.js')) {
-        improvements.push('Resaltar experiencia en React/Next.js y componentes reutilizables.')
+    if (jobTags.some((tag) => ['php', 'laravel'].includes(tag.toLowerCase()))) {
+        improvements.push('Mencionar experiencia con PHP/Laravel si aplica para esta oferta.')
     }
 
-    return improvements.slice(0, 8)
+    if (jobTags.some((tag) => ['sql', 'postgresql', 'mysql'].includes(tag.toLowerCase()))) {
+        improvements.push('Agregar experiencia con SQL, consultas, modelado de datos o PostgreSQL/MySQL.')
+    }
+
+    if (missingFromCv.length > 0) {
+        improvements.push(
+            `Revisar si puedes respaldar estas keywords antes de agregarlas al CV: ${missingFromCv
+                .slice(0, 6)
+                .join(', ')}.`
+        )
+    }
+
+    return improvements.slice(0, 9)
 }
 
-function buildRecruiterMessage(item: SessionItemRow) {
+function buildRecruiterMessage(item: SessionItemRow, cvProfile: CvProfileRow | null) {
     const job = item.jobs
 
     if (!job) {
         return ''
     }
 
+    const headline =
+        cvProfile?.headline || 'Desarrollador Backend / Full Stack Junior'
+
+    const summary =
+        cvProfile?.summary ||
+        'Tengo experiencia desarrollando soluciones web, APIs y sistemas con tecnologías como Node.js, TypeScript, React/Next.js y bases de datos SQL.'
+
     return [
         `Hola, vi la oferta de ${job.title} en ${job.company} y me interesa postular.`,
         '',
-        'Tengo experiencia desarrollando soluciones web, APIs y sistemas con tecnologías como Node.js, TypeScript, React/Next.js y bases de datos SQL.',
+        `Soy ${headline}. ${summary}`,
         '',
         'Me gustaría conversar para contarles cómo mi perfil puede aportar al equipo.',
         '',
@@ -571,19 +612,32 @@ function buildRecruiterMessage(item: SessionItemRow) {
     ].join('\n')
 }
 
-function buildCoverLetter(item: SessionItemRow) {
+function buildCoverLetter(item: SessionItemRow, cvProfile: CvProfileRow | null) {
     const job = item.jobs
 
     if (!job) {
         return ''
     }
 
+    const headline =
+        cvProfile?.headline || 'Desarrollador Backend / Full Stack Junior'
+
+    const summary =
+        cvProfile?.summary ||
+        'Mi perfil está orientado al desarrollo de aplicaciones web, backend, APIs y soluciones full stack.'
+
+    const skills = cvProfile?.skills?.slice(0, 8).join(', ')
+
     return [
         `Estimado equipo de ${job.company}:`,
         '',
-        `Me interesa postular al cargo de ${job.title}. Mi perfil está orientado al desarrollo de aplicaciones web, backend, APIs y soluciones full stack, con foco en construir sistemas funcionales, mantenibles y alineados a las necesidades del negocio.`,
+        `Me interesa postular al cargo de ${job.title}. Soy ${headline}.`,
         '',
-        'He trabajado con tecnologías como Node.js, TypeScript, React/Next.js y bases de datos SQL, además de participar en proyectos donde es importante entender requerimientos, resolver problemas y entregar soluciones prácticas.',
+        summary,
+        '',
+        skills
+            ? `Dentro de mi stack principal manejo: ${skills}.`
+            : 'Tengo experiencia en desarrollo web, backend, frontend y bases de datos.',
         '',
         'Me motiva la posibilidad de aportar al equipo, seguir creciendo profesionalmente y contribuir con responsabilidad desde el primer día.',
         '',
@@ -656,6 +710,38 @@ function buildPackReadyMessage(params: {
         `confirmar ${item.item_number} → aprobar pack antes de postular`,
     ].join('\n')
 }
+async function getActiveCvProfile(profileId: string) {
+    const supabase = createAdminClient()
+
+    const { data, error } = await supabase
+        .from('cv_profiles')
+        .select(`
+            id,
+            profile_id,
+            original_filename,
+            raw_text,
+            summary,
+            headline,
+            skills,
+            experience,
+            projects,
+            education,
+            languages,
+            parsed_by,
+            is_active
+        `)
+        .eq('profile_id', profileId)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+    if (error) {
+        throw new Error(error.message)
+    }
+
+    return data as CvProfileRow | null
+}
 
 async function handlePrepareCommand(params: {
     recipient: string
@@ -687,14 +773,16 @@ async function handlePrepareCommand(params: {
         return '❌ No pude cargar los datos necesarios para preparar la postulación.'
     }
 
+    const cvProfile = await getActiveCvProfile(item.profile_id)
+
     const supabase = createAdminClient()
     const now = new Date().toISOString()
 
     const atsKeywords = buildAtsKeywords(item)
     const fitSummary = buildFitSummary(item)
-    const cvImprovements = buildCvImprovements(item)
-    const recruiterMessage = buildRecruiterMessage(item)
-    const coverLetter = buildCoverLetter(item)
+    const cvImprovements = buildCvImprovements(item, cvProfile)
+    const recruiterMessage = buildRecruiterMessage(item, cvProfile)
+    const coverLetter = buildCoverLetter(item, cvProfile)
     const checklist = buildChecklist(item)
 
     const { data: pack, error: packError } = await supabase
@@ -703,7 +791,9 @@ async function handlePrepareCommand(params: {
             {
                 job_id: item.job_id,
                 profile_id: item.profile_id,
-                recommended_cv_variant: 'backend_fullstack_jr',
+                recommended_cv_variant: cvProfile?.headline
+                    ? 'backend_fullstack_jr_cv_profile'
+                    : 'backend_fullstack_jr',
                 fit_summary: fitSummary,
                 ats_keywords: atsKeywords,
                 missing_keywords: [],
@@ -712,7 +802,7 @@ async function handlePrepareCommand(params: {
                 recruiter_message: recruiterMessage,
                 form_answers: [],
                 checklist,
-                generated_by: 'rules_whatsapp',
+                generated_by: cvProfile ? 'rules_whatsapp_cv_profile' : 'rules_whatsapp',
                 updated_at: now,
             },
             {
