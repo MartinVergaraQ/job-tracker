@@ -98,10 +98,12 @@ type MatchCommand = {
     | 'mensaje'
     | 'cv'
     | 'carta'
+    | 'confirmar'
     | 'descartar'
     | 'aplicado'
     itemNumber: number
 }
+
 type PackCommandMode = 'pack' | 'mensaje' | 'cv' | 'carta'
 
 function isPackCommandMode(action: MatchCommand['action']): action is PackCommandMode {
@@ -164,7 +166,7 @@ type ApplicationPackRow = {
 
 function parseMatchCommand(command: string): MatchCommand | null {
     const match = command.match(
-        /^(match|preparar|pack|mensaje|cv|carta|descartar|aplicado)\s+(\d+)$/
+        /^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado)\s+(\d+)$/
     )
 
     if (!match) return null
@@ -1007,6 +1009,93 @@ async function handlePackCommand(params: {
         pack: result.pack,
     })
 }
+async function handleConfirmCommand(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const packResult = await getApplicationPackForSessionItem({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!packResult.ok) {
+        if (packResult.reason === 'no_active_session') {
+            return [
+                'No tienes una sesión activa de matches.',
+                '',
+                'Primero responde:',
+                'run',
+            ].join('\n')
+        }
+
+        if (packResult.reason === 'pack_not_found') {
+            return [
+                `Todavía no existe pack para el match ${params.itemNumber}.`,
+                '',
+                'Primero responde:',
+                `preparar ${params.itemNumber}`,
+            ].join('\n')
+        }
+
+        return `No encontré el match ${params.itemNumber}.`
+    }
+
+    const item = packResult.item
+    const job = item.jobs
+    const profile = item.search_profiles
+    const supabase = createAdminClient()
+    const now = new Date().toISOString()
+
+    const { error: applicationError } = await supabase
+        .from('job_applications')
+        .upsert(
+            {
+                job_id: item.job_id,
+                profile_id: item.profile_id,
+                status: 'approved',
+                cv_variant: packResult.pack.recommended_cv_variant,
+                notes: 'Pack aprobado desde WhatsApp. Listo para postular.',
+                source_notes: 'whatsapp_command:confirmar',
+                updated_at: now,
+            },
+            {
+                onConflict: 'job_id,profile_id',
+            }
+        )
+
+    if (applicationError) {
+        throw new Error(applicationError.message)
+    }
+
+    const { error: matchError } = await supabase
+        .from('job_matches')
+        .update({
+            saved: true,
+        })
+        .eq('id', item.match_id)
+
+    if (matchError) {
+        throw new Error(matchError.message)
+    }
+
+    return [
+        `✅ Pack aprobado para Match ${params.itemNumber}`,
+        '',
+        job ? `Cargo: ${job.title}` : null,
+        job ? `Empresa: ${job.company}` : null,
+        profile ? `Perfil: ${profile.name}` : null,
+        '',
+        'Estado guardado:',
+        'approved',
+        '',
+        'Siguiente paso:',
+        job?.url ? `Postula aquí:\n${job.url}` : 'Abre el link de la oferta desde match.',
+        '',
+        `Cuando postules, responde: aplicado ${params.itemNumber}`,
+    ]
+        .filter(Boolean)
+        .join('\n')
+}
 
 type IncomingCommand = {
     from: string
@@ -1075,6 +1164,7 @@ function buildHelpMessage() {
         'mensaje 1 - ver mensaje para recruiter',
         'cv 1 - ver mejoras sugeridas al CV',
         'carta 1 - ver carta de presentación',
+        'confirmar 1 - aprobar pack antes de postular',
         'descartar 1 - descartar match',
         'aplicado 1 - marcar como postulado',
         'ayuda - ver comandos',
@@ -1427,6 +1517,32 @@ export async function POST(request: NextRequest): Promise<Response> {
                         to: incoming.from,
                         body: [
                             '❌ No pude cargar el pack.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
+            })
+
+            continue
+        }
+        if (matchCommand?.action === 'confirmar') {
+            after(async () => {
+                try {
+                    const message = await handleConfirmCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude confirmar el pack.',
                             '',
                             error instanceof Error ? error.message : 'Error desconocido',
                         ].join('\n'),
