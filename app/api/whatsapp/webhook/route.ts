@@ -91,8 +91,26 @@ type WhatsAppWebhookPayload = {
     }>
 }
 type MatchCommand = {
-    action: 'match' | 'preparar' | 'descartar' | 'aplicado'
+    action:
+    | 'match'
+    | 'preparar'
+    | 'pack'
+    | 'mensaje'
+    | 'cv'
+    | 'carta'
+    | 'descartar'
+    | 'aplicado'
     itemNumber: number
+}
+type PackCommandMode = 'pack' | 'mensaje' | 'cv' | 'carta'
+
+function isPackCommandMode(action: MatchCommand['action']): action is PackCommandMode {
+    return (
+        action === 'pack' ||
+        action === 'mensaje' ||
+        action === 'cv' ||
+        action === 'carta'
+    )
 }
 
 type SessionItemRow = {
@@ -126,9 +144,28 @@ type SessionItemRow = {
         slug: string
     } | null
 }
+type ApplicationPackRow = {
+    id: string
+    job_id: string
+    profile_id: string
+    recommended_cv_variant: string
+    fit_summary: string
+    ats_keywords: string[] | null
+    missing_keywords: string[] | null
+    cv_improvements: string[] | null
+    cover_letter: string
+    recruiter_message: string
+    form_answers: unknown
+    checklist: unknown
+    generated_by: string
+    created_at: string
+    updated_at: string
+}
 
 function parseMatchCommand(command: string): MatchCommand | null {
-    const match = command.match(/^(match|preparar|descartar|aplicado)\s+(\d+)$/)
+    const match = command.match(
+        /^(match|preparar|pack|mensaje|cv|carta|descartar|aplicado)\s+(\d+)$/
+    )
 
     if (!match) return null
 
@@ -724,6 +761,252 @@ async function handlePrepareCommand(params: {
         packId: pack.id,
     })
 }
+function limitText(value: string, maxLength: number) {
+    if (value.length <= maxLength) return value
+    return `${value.slice(0, maxLength - 1)}…`
+}
+
+function formatList(values: string[] | null | undefined, fallback: string) {
+    if (!values || values.length === 0) {
+        return fallback
+    }
+
+    return values.slice(0, 10).map((value) => `- ${value}`).join('\n')
+}
+
+async function getApplicationPackForSessionItem(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        return {
+            ok: false as const,
+            reason: result.reason,
+            item: null,
+            pack: null,
+        }
+    }
+
+    const item = result.item
+    const supabase = createAdminClient()
+
+    const { data: pack, error } = await supabase
+        .from('application_packs')
+        .select(`
+            id,
+            job_id,
+            profile_id,
+            recommended_cv_variant,
+            fit_summary,
+            ats_keywords,
+            missing_keywords,
+            cv_improvements,
+            cover_letter,
+            recruiter_message,
+            form_answers,
+            checklist,
+            generated_by,
+            created_at,
+            updated_at
+        `)
+        .eq('job_id', item.job_id)
+        .eq('profile_id', item.profile_id)
+        .maybeSingle()
+
+    if (error) {
+        throw new Error(error.message)
+    }
+
+    if (!pack) {
+        return {
+            ok: false as const,
+            reason: 'pack_not_found' as const,
+            item,
+            pack: null,
+        }
+    }
+
+    return {
+        ok: true as const,
+        reason: null,
+        item,
+        pack: pack as ApplicationPackRow,
+    }
+}
+
+function buildPackMessage(params: {
+    item: SessionItemRow
+    pack: ApplicationPackRow
+}) {
+    const { item, pack } = params
+    const job = item.jobs
+    const profile = item.search_profiles
+
+    if (!job || !profile) {
+        return '❌ No pude cargar el detalle del pack.'
+    }
+
+    return limitText(
+        [
+            `📦 Pack Match ${item.item_number}`,
+            '',
+            `Cargo: ${job.title}`,
+            `Empresa: ${job.company}`,
+            `Perfil: ${profile.name}`,
+            `CV recomendado: ${pack.recommended_cv_variant}`,
+            '',
+            'Resumen de calce:',
+            pack.fit_summary || 'Sin resumen generado.',
+            '',
+            'Keywords ATS:',
+            pack.ats_keywords?.length
+                ? pack.ats_keywords.slice(0, 15).join(', ')
+                : 'Sin keywords.',
+            '',
+            'Mejoras sugeridas al CV:',
+            formatList(pack.cv_improvements, 'Sin mejoras sugeridas.'),
+            '',
+            'Mensaje recruiter:',
+            pack.recruiter_message || 'Sin mensaje generado.',
+            '',
+            'Comandos:',
+            `mensaje ${item.item_number} → ver solo mensaje recruiter`,
+            `cv ${item.item_number} → ver mejoras CV`,
+            `carta ${item.item_number} → ver carta`,
+            `aplicado ${item.item_number} → marcar postulado`,
+        ].join('\n'),
+        3500
+    )
+}
+
+function buildRecruiterOnlyMessage(params: {
+    item: SessionItemRow
+    pack: ApplicationPackRow
+}) {
+    const job = params.item.jobs
+
+    return limitText(
+        [
+            `💬 Mensaje recruiter - Match ${params.item.item_number}`,
+            '',
+            job ? `${job.title} - ${job.company}` : null,
+            '',
+            params.pack.recruiter_message || 'Sin mensaje generado.',
+        ]
+            .filter(Boolean)
+            .join('\n'),
+        3500
+    )
+}
+
+function buildCvOnlyMessage(params: {
+    item: SessionItemRow
+    pack: ApplicationPackRow
+}) {
+    return limitText(
+        [
+            `🧾 CV sugerido - Match ${params.item.item_number}`,
+            '',
+            `Variante recomendada: ${params.pack.recommended_cv_variant}`,
+            '',
+            'Keywords ATS:',
+            params.pack.ats_keywords?.length
+                ? params.pack.ats_keywords.slice(0, 20).join(', ')
+                : 'Sin keywords.',
+            '',
+            'Mejoras al CV:',
+            formatList(params.pack.cv_improvements, 'Sin mejoras sugeridas.'),
+            '',
+            'Keywords faltantes:',
+            formatList(params.pack.missing_keywords, 'Sin keywords faltantes detectadas.'),
+        ].join('\n'),
+        3500
+    )
+}
+
+function buildCoverLetterOnlyMessage(params: {
+    item: SessionItemRow
+    pack: ApplicationPackRow
+}) {
+    const job = params.item.jobs
+
+    return limitText(
+        [
+            `📄 Carta - Match ${params.item.item_number}`,
+            '',
+            job ? `${job.title} - ${job.company}` : null,
+            '',
+            params.pack.cover_letter || 'Sin carta generada.',
+        ]
+            .filter(Boolean)
+            .join('\n'),
+        3500
+    )
+}
+
+async function handlePackCommand(params: {
+    recipient: string
+    itemNumber: number
+    mode: PackCommandMode
+}) {
+    const result = await getApplicationPackForSessionItem({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        if (result.reason === 'no_active_session') {
+            return [
+                'No tienes una sesión activa de matches.',
+                '',
+                'Primero responde:',
+                'run',
+            ].join('\n')
+        }
+
+        if (result.reason === 'pack_not_found') {
+            return [
+                `Todavía no existe pack para el match ${params.itemNumber}.`,
+                '',
+                'Primero responde:',
+                `preparar ${params.itemNumber}`,
+            ].join('\n')
+        }
+
+        return `No encontré el match ${params.itemNumber}.`
+    }
+
+    if (params.mode === 'mensaje') {
+        return buildRecruiterOnlyMessage({
+            item: result.item,
+            pack: result.pack,
+        })
+    }
+
+    if (params.mode === 'cv') {
+        return buildCvOnlyMessage({
+            item: result.item,
+            pack: result.pack,
+        })
+    }
+
+    if (params.mode === 'carta') {
+        return buildCoverLetterOnlyMessage({
+            item: result.item,
+            pack: result.pack,
+        })
+    }
+
+    return buildPackMessage({
+        item: result.item,
+        pack: result.pack,
+    })
+}
 
 type IncomingCommand = {
     from: string
@@ -788,6 +1071,10 @@ function buildHelpMessage() {
         'matches - mostrar últimos matches',
         'match 1 - ver detalle del match 1',
         'preparar 1 - generar pack de postulación',
+        'pack 1 - ver pack completo',
+        'mensaje 1 - ver mensaje para recruiter',
+        'cv 1 - ver mejoras sugeridas al CV',
+        'carta 1 - ver carta de presentación',
         'descartar 1 - descartar match',
         'aplicado 1 - marcar como postulado',
         'ayuda - ver comandos',
@@ -1111,6 +1398,35 @@ export async function POST(request: NextRequest): Promise<Response> {
                         to: incoming.from,
                         body: [
                             '❌ No pude preparar el pack de postulación.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
+            })
+
+            continue
+        }
+        if (matchCommand && isPackCommandMode(matchCommand.action)) {
+            const mode = matchCommand.action
+
+            after(async () => {
+                try {
+                    const message = await handlePackCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                        mode,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude cargar el pack.',
                             '',
                             error instanceof Error ? error.message : 'Error desconocido',
                         ].join('\n'),
