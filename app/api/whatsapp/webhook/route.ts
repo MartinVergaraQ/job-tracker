@@ -312,6 +312,132 @@ async function handleMatchDetailCommand(params: {
 
     return buildMatchDetailMessage(result.item)
 }
+async function handleDismissCommand(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        if (result.reason === 'no_active_session') {
+            return [
+                'No tienes una sesión activa de matches.',
+                '',
+                'Primero responde:',
+                'run',
+            ].join('\n')
+        }
+
+        return `No encontré el match ${params.itemNumber}.`
+    }
+
+    const item = result.item
+    const job = item.jobs
+
+    const supabase = createAdminClient()
+
+    const { error } = await supabase
+        .from('job_matches')
+        .update({
+            dismissed: true,
+        })
+        .eq('id', item.match_id)
+
+    if (error) {
+        throw new Error(error.message)
+    }
+
+    return [
+        `🗑️ Match ${params.itemNumber} descartado.`,
+        '',
+        job ? `${job.title} - ${job.company}` : null,
+        '',
+        'Puedes revisar otro:',
+        'match 2',
+        'preparar 2',
+        'o correr:',
+        'run',
+    ]
+        .filter(Boolean)
+        .join('\n')
+}
+
+async function handleAppliedCommand(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        if (result.reason === 'no_active_session') {
+            return [
+                'No tienes una sesión activa de matches.',
+                '',
+                'Primero responde:',
+                'run',
+            ].join('\n')
+        }
+
+        return `No encontré el match ${params.itemNumber}.`
+    }
+
+    const item = result.item
+    const job = item.jobs
+    const profile = item.search_profiles
+    const supabase = createAdminClient()
+    const now = new Date().toISOString()
+
+    const { error: applicationError } = await supabase
+        .from('job_applications')
+        .upsert(
+            {
+                job_id: item.job_id,
+                profile_id: item.profile_id,
+                status: 'applied',
+                applied_at: now,
+                notes: 'Marcado como postulado desde WhatsApp.',
+                source_notes: 'whatsapp_command:aplicado',
+                updated_at: now,
+            },
+            {
+                onConflict: 'job_id,profile_id',
+            }
+        )
+
+    if (applicationError) {
+        throw new Error(applicationError.message)
+    }
+
+    const { error: matchError } = await supabase
+        .from('job_matches')
+        .update({
+            saved: true,
+        })
+        .eq('id', item.match_id)
+
+    if (matchError) {
+        throw new Error(matchError.message)
+    }
+
+    return [
+        `✅ Match ${params.itemNumber} marcado como postulado.`,
+        '',
+        job ? `Cargo: ${job.title}` : null,
+        job ? `Empresa: ${job.company}` : null,
+        profile ? `Perfil: ${profile.name}` : null,
+        '',
+        'Estado guardado en job_applications:',
+        'applied',
+    ]
+        .filter(Boolean)
+        .join('\n')
+}
 
 type IncomingCommand = {
     from: string
@@ -609,6 +735,59 @@ export async function POST(request: NextRequest): Promise<Response> {
                     to: incoming.from,
                     body: message,
                 })
+            })
+
+            continue
+        }
+        if (matchCommand?.action === 'descartar') {
+            after(async () => {
+                try {
+                    const message = await handleDismissCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude descartar el match.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
+            })
+
+            continue
+        }
+
+        if (matchCommand?.action === 'aplicado') {
+            after(async () => {
+                try {
+                    const message = await handleAppliedCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude marcar como postulado.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
             })
 
             continue
