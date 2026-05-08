@@ -1,5 +1,6 @@
 import { after, NextRequest, NextResponse } from 'next/server'
 import { sendWhatsAppMessage } from '@/lib/notifications/send-whatsapp-message'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 export const maxDuration = 300
 
@@ -88,6 +89,228 @@ type WhatsAppWebhookPayload = {
             }
         }>
     }>
+}
+type MatchCommand = {
+    action: 'match' | 'preparar' | 'descartar' | 'aplicado'
+    itemNumber: number
+}
+
+type SessionItemRow = {
+    id: string
+    session_id: string
+    item_number: number
+    match_id: string
+    job_id: string
+    profile_id: string
+    job_matches: {
+        id: string
+        score: number
+        reasons: string[] | null
+    } | null
+    jobs: {
+        id: string
+        title: string
+        company: string
+        location: string | null
+        modality: string | null
+        seniority: string | null
+        salary_text: string | null
+        tech_tags: string[] | null
+        url: string
+        description: string | null
+        source_name: string
+    } | null
+    search_profiles: {
+        id: string
+        name: string
+        slug: string
+    } | null
+}
+
+function parseMatchCommand(command: string): MatchCommand | null {
+    const match = command.match(/^(match|preparar|descartar|aplicado)\s+(\d+)$/)
+
+    if (!match) return null
+
+    const action = match[1] as MatchCommand['action']
+    const itemNumber = Number(match[2])
+
+    if (!Number.isInteger(itemNumber) || itemNumber <= 0) {
+        return null
+    }
+
+    return {
+        action,
+        itemNumber,
+    }
+}
+
+function normalizeReasons(reasons: string[] | null | undefined) {
+    if (!reasons || reasons.length === 0) {
+        return ['Buen calce general con tu perfil.']
+    }
+
+    return reasons.slice(0, 6)
+}
+
+function formatTags(tags: string[] | null | undefined) {
+    if (!tags || tags.length === 0) return 'Sin tags'
+    return tags.slice(0, 12).join(', ')
+}
+
+function buildMatchDetailMessage(row: SessionItemRow) {
+    const job = row.jobs
+    const match = row.job_matches
+    const profile = row.search_profiles
+
+    if (!job || !match || !profile) {
+        return '❌ No pude cargar el detalle de este match.'
+    }
+
+    const reasons = normalizeReasons(match.reasons)
+
+    return [
+        `🎯 Match ${row.item_number}`,
+        '',
+        `Cargo: ${job.title}`,
+        `Empresa: ${job.company}`,
+        `Perfil: ${profile.name}`,
+        `Score: ${Math.round(match.score)}`,
+        `Ubicación: ${job.location ?? 'No indicada'}`,
+        `Modalidad: ${job.modality ?? 'No indicada'}`,
+        `Senioridad: ${job.seniority ?? 'No indicada'}`,
+        job.salary_text ? `Sueldo: ${job.salary_text}` : null,
+        '',
+        `Tags: ${formatTags(job.tech_tags)}`,
+        '',
+        'Por qué calza:',
+        ...reasons.map((reason) => `- ${reason}`),
+        '',
+        'Link:',
+        job.url,
+        '',
+        'Puedes responder:',
+        `preparar ${row.item_number}`,
+        `descartar ${row.item_number}`,
+        `aplicado ${row.item_number}`,
+    ]
+        .filter(Boolean)
+        .join('\n')
+}
+
+async function getSessionItemByNumber(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const supabase = createAdminClient()
+
+    const { data: session, error: sessionError } = await supabase
+        .from('whatsapp_match_sessions')
+        .select('id')
+        .eq('recipient', params.recipient)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+    if (sessionError) {
+        throw new Error(sessionError.message)
+    }
+
+    if (!session) {
+        return {
+            ok: false as const,
+            reason: 'no_active_session' as const,
+            item: null,
+        }
+    }
+
+    const { data: item, error: itemError } = await supabase
+        .from('whatsapp_match_session_items')
+        .select(`
+            id,
+            session_id,
+            item_number,
+            match_id,
+            job_id,
+            profile_id,
+            job_matches (
+                id,
+                score,
+                reasons
+            ),
+            jobs (
+                id,
+                title,
+                company,
+                location,
+                modality,
+                seniority,
+                salary_text,
+                tech_tags,
+                url,
+                description,
+                source_name
+            ),
+            search_profiles (
+                id,
+                name,
+                slug
+            )
+        `)
+        .eq('session_id', session.id)
+        .eq('item_number', params.itemNumber)
+        .maybeSingle()
+
+    if (itemError) {
+        throw new Error(itemError.message)
+    }
+
+    if (!item) {
+        return {
+            ok: false as const,
+            reason: 'item_not_found' as const,
+            item: null,
+        }
+    }
+
+    return {
+        ok: true as const,
+        reason: null,
+        item: item as unknown as SessionItemRow,
+    }
+}
+
+async function handleMatchDetailCommand(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        if (result.reason === 'no_active_session') {
+            return [
+                'No tienes una sesión activa de matches.',
+                '',
+                'Primero responde:',
+                'run',
+            ].join('\n')
+        }
+
+        return [
+            `No encontré el match ${params.itemNumber}.`,
+            '',
+            'Responde:',
+            'matches',
+            'o vuelve a correr:',
+            'run',
+        ].join('\n')
+    }
+
+    return buildMatchDetailMessage(result.item)
 }
 
 type IncomingCommand = {
@@ -367,6 +590,24 @@ export async function POST(request: NextRequest): Promise<Response> {
                 await sendWhatsAppMessage({
                     to: incoming.from,
                     body: buildHelpMessage(),
+                })
+            })
+
+            continue
+        }
+
+        const matchCommand = parseMatchCommand(command)
+
+        if (matchCommand?.action === 'match') {
+            after(async () => {
+                const message = await handleMatchDetailCommand({
+                    recipient: incoming.from,
+                    itemNumber: matchCommand.itemNumber,
+                })
+
+                await sendWhatsAppMessage({
+                    to: incoming.from,
+                    body: message,
                 })
             })
 
