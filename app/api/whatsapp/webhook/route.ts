@@ -1,5 +1,5 @@
 import { after, NextRequest, NextResponse } from 'next/server'
-import { sendWhatsAppMessage } from '@/lib/notifications/whatsapp'
+import { sendWhatsAppMessage } from '@/lib/notifications/send-whatsapp-message'
 
 export const maxDuration = 300
 
@@ -20,42 +20,121 @@ type PipelineResponse = {
                 error?: string
             }>
         }
+        error?: string
     }
+    enrich?: {
+        ok: boolean
+        result?: {
+            scanned?: number
+            enriched?: number
+        }
+        error?: string
+    } | null
+    rescore?: {
+        ok: boolean
+        result?: {
+            scanned?: number
+            rescored?: number
+            matches_upserted?: number
+        }
+        error?: string
+    } | null
     notify?: {
         ok: boolean
         scanned?: number
         selected?: number
         sent?: number
-        skipped?: Array<{
-            matchId: string
-            reason: string
-        }>
-    }
+        sessionId?: string
+        message?: string
+        failures?: unknown[]
+        skipped?: unknown[]
+    } | null
     internal_statuses?: {
-        enrich: number
-        rescore: number
-        notify: number
+        enrich?: number
+        rescore?: number
+        notify?: number
     }
     error?: string
 }
 
-function getBaseUrl(request: NextRequest) {
-    const envUrl = process.env.NEXT_PUBLIC_APP_URL?.trim()
+type WhatsAppWebhookPayload = {
+    object?: string
+    entry?: Array<{
+        id?: string
+        changes?: Array<{
+            field?: string
+            value?: {
+                messaging_product?: string
+                metadata?: {
+                    display_phone_number?: string
+                    phone_number_id?: string
+                }
+                contacts?: Array<{
+                    profile?: {
+                        name?: string
+                    }
+                    wa_id?: string
+                }>
+                messages?: Array<{
+                    from?: string
+                    id?: string
+                    timestamp?: string
+                    type?: string
+                    text?: {
+                        body?: string
+                    }
+                }>
+                statuses?: unknown[]
+            }
+        }>
+    }>
+}
 
-    if (envUrl) {
-        return envUrl.replace(/\/$/, '')
+type IncomingCommand = {
+    from: string
+    body: string
+    messageId?: string
+}
+
+function getBaseUrl(request: NextRequest) {
+    const internalBaseUrl = process.env.INTERNAL_BASE_URL?.trim()
+    const publicAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim()
+
+    if (internalBaseUrl) {
+        return internalBaseUrl.replace(/\/$/, '')
+    }
+
+    if (publicAppUrl) {
+        return publicAppUrl.replace(/\/$/, '')
     }
 
     return request.nextUrl.origin
 }
 
+function normalizeWhatsAppRecipient(value: string) {
+    const clean = value.trim().replace(/\s+/g, '')
+
+    if (clean.startsWith('whatsapp:')) {
+        return clean
+    }
+
+    if (clean.startsWith('+')) {
+        return `whatsapp:${clean}`
+    }
+
+    return `whatsapp:+${clean}`
+}
+
+function normalizeMetaWaId(value: string) {
+    return normalizeWhatsAppRecipient(value)
+}
+
 function isAllowedSender(from: string | null) {
     const allowed = process.env.WHATSAPP_ALLOWED_FROM?.trim()
 
-    if (!allowed) return false
-    if (!from) return false
+    if (!allowed || !from) return false
 
-    return from === allowed
+    return normalizeWhatsAppRecipient(allowed) === normalizeWhatsAppRecipient(from)
 }
 
 function normalizeCommand(value: string | null) {
@@ -70,7 +149,12 @@ function buildHelpMessage() {
     return [
         'Comandos disponibles:',
         '',
-        'run - correr colector completo',
+        'run - correr pipeline completo',
+        'matches - mostrar últimos matches',
+        'match 1 - ver detalle del match 1',
+        'preparar 1 - generar pack de postulación',
+        'descartar 1 - descartar match',
+        'aplicado 1 - marcar como postulado',
         'ayuda - ver comandos',
         '',
         'Ejemplo:',
@@ -80,11 +164,22 @@ function buildHelpMessage() {
 
 function buildPipelineSummary(result: PipelineResponse) {
     if (!result.ok) {
+        const collectError = result.collect?.error
+        const enrichError = result.enrich?.error
+        const rescoreError = result.rescore?.error
+        const notifyFailures = result.notify?.failures?.length ?? 0
+
         return [
             '❌ Pipeline falló',
             '',
-            `Error: ${result.error ?? 'Error desconocido'}`,
-        ].join('\n')
+            result.error ? `Error: ${result.error}` : null,
+            collectError ? `Collect: ${collectError}` : null,
+            enrichError ? `Enrich: ${enrichError}` : null,
+            rescoreError ? `Rescore: ${rescoreError}` : null,
+            notifyFailures ? `Notify failures: ${notifyFailures}` : null,
+        ]
+            .filter(Boolean)
+            .join('\n')
     }
 
     const collectResult = result.collect?.result
@@ -98,28 +193,64 @@ function buildPipelineSummary(result: PipelineResponse) {
         `Jobs procesados: ${collectResult?.jobs_processed ?? 0}`,
         `Matches creados: ${collectResult?.matches_created ?? 0}`,
         '',
-        `Notificaciones enviadas: ${result.notify?.sent ?? 0}`,
-        `Ya enviados / omitidos: ${result.notify?.skipped?.length ?? 0}`,
+        `Top matches enviados: ${result.notify?.selected ?? 0}`,
+        `Mensajes WhatsApp: ${result.notify?.sent ?? 0}`,
+        result.notify?.sessionId ? `Sesión: ${result.notify.sessionId.slice(0, 8)}` : null,
         '',
-        'Fuentes:',
-        ...sources.map((source) => {
+        sources.length ? 'Fuentes:' : null,
+        ...sources.slice(0, 8).map((source) => {
             const status = source.ok ? 'OK' : 'FAIL'
             const skipped = source.skipped ? ' / skipped' : ''
             return `- ${source.source_name}: ${status}${skipped} · ${source.jobs_found} jobs`
         }),
-    ].join('\n')
+        '',
+        'Responde:',
+        'matches',
+        'match 1',
+        'preparar 1',
+    ]
+        .filter(Boolean)
+        .join('\n')
+}
+
+function extractCommands(payload: WhatsAppWebhookPayload): IncomingCommand[] {
+    const commands: IncomingCommand[] = []
+
+    for (const entry of payload.entry ?? []) {
+        for (const change of entry.changes ?? []) {
+            const value = change.value
+            const messages = value?.messages ?? []
+
+            for (const message of messages) {
+                if (message.type !== 'text') continue
+
+                const fromWaId = message.from
+                const text = message.text?.body
+
+                if (!fromWaId || !text) continue
+
+                commands.push({
+                    from: normalizeMetaWaId(fromWaId),
+                    body: text,
+                    messageId: message.id,
+                })
+            }
+        }
+    }
+
+    return commands
 }
 
 async function runPipelineFromWebhook(params: {
     baseUrl: string
     replyTo: string
 }) {
-    const internalSecret = process.env.INTERNAL_API_SECRET
+    const cronSecret = process.env.CRON_SECRET ?? process.env.INTERNAL_API_SECRET
 
-    if (!internalSecret) {
+    if (!cronSecret) {
         await sendWhatsAppMessage({
             to: params.replyTo,
-            body: '❌ Falta INTERNAL_API_SECRET en variables de entorno.',
+            body: '❌ Falta CRON_SECRET o INTERNAL_API_SECRET en variables de entorno.',
         })
 
         return
@@ -129,7 +260,7 @@ async function runPipelineFromWebhook(params: {
         const response = await fetch(`${params.baseUrl}/api/cron/run-all`, {
             method: 'GET',
             headers: {
-                Authorization: `Bearer ${internalSecret}`,
+                Authorization: `Bearer ${cronSecret}`,
             },
             cache: 'no-store',
         })
@@ -157,62 +288,118 @@ async function runPipelineFromWebhook(params: {
     }
 }
 
+/**
+ * GET requerido por Meta para verificar el webhook.
+ * Meta envía hub.mode, hub.verify_token y hub.challenge.
+ */
+export async function GET(request: NextRequest): Promise<Response> {
+    const searchParams = request.nextUrl.searchParams
+
+    const mode = searchParams.get('hub.mode')
+    const token = searchParams.get('hub.verify_token')
+    const challenge = searchParams.get('hub.challenge')
+
+    const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN
+
+    if (mode === 'subscribe' && token && token === verifyToken && challenge) {
+        return new NextResponse(challenge, {
+            status: 200,
+            headers: {
+                'Content-Type': 'text/plain',
+            },
+        })
+    }
+
+    return new NextResponse('Forbidden', { status: 403 })
+}
+
+/**
+ * POST usado por Meta para enviar mensajes entrantes y eventos.
+ */
 export async function POST(request: NextRequest): Promise<Response> {
     const enabled = process.env.WHATSAPP_BOT_ENABLED === 'true'
 
     if (!enabled) {
-        return new NextResponse('WhatsApp bot disabled', { status: 200 })
+        return NextResponse.json({ ok: true, message: 'WhatsApp bot disabled' })
     }
 
-    const formData = await request.formData()
+    let payload: WhatsAppWebhookPayload
 
-    const from = String(formData.get('From') ?? '')
-    const body = String(formData.get('Body') ?? '')
-
-    if (!isAllowedSender(from)) {
-        return new NextResponse('Unauthorized sender', { status: 200 })
+    try {
+        payload = (await request.json()) as WhatsAppWebhookPayload
+    } catch {
+        return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 })
     }
 
-    const command = normalizeCommand(body)
+    const commands = extractCommands(payload)
 
-    if (command === 'run' || command === 'correr' || command === 'buscar') {
-        const baseUrl = getBaseUrl(request)
+    if (commands.length === 0) {
+        return NextResponse.json({ ok: true, message: 'No text commands' })
+    }
+
+    const baseUrl = getBaseUrl(request)
+
+    for (const incoming of commands) {
+        if (!isAllowedSender(incoming.from)) {
+            continue
+        }
+
+        const command = normalizeCommand(incoming.body)
+
+        if (command === 'run' || command === 'correr' || command === 'buscar') {
+            after(async () => {
+                await sendWhatsAppMessage({
+                    to: incoming.from,
+                    body: '🚀 Ok, estoy corriendo el pipeline. Te aviso cuando termine.',
+                })
+
+                await runPipelineFromWebhook({
+                    baseUrl,
+                    replyTo: incoming.from,
+                })
+            })
+
+            continue
+        }
+
+        if (command === 'ayuda' || command === 'help' || command === 'comandos') {
+            after(async () => {
+                await sendWhatsAppMessage({
+                    to: incoming.from,
+                    body: buildHelpMessage(),
+                })
+            })
+
+            continue
+        }
+
+        if (command === 'matches') {
+            after(async () => {
+                await sendWhatsAppMessage({
+                    to: incoming.from,
+                    body: [
+                        'Todavía estamos conectando el comando matches.',
+                        '',
+                        'Por ahora usa:',
+                        'run',
+                    ].join('\n'),
+                })
+            })
+
+            continue
+        }
 
         after(async () => {
             await sendWhatsAppMessage({
-                to: from,
-                body: '🚀 Ok, estoy corriendo el pipeline. Te aviso cuando termine.',
+                to: incoming.from,
+                body: [
+                    'No entendí ese comando.',
+                    '',
+                    buildHelpMessage(),
+                ].join('\n'),
             })
-
-            await runPipelineFromWebhook({
-                baseUrl,
-                replyTo: from,
-            })
-        })
-
-        return new NextResponse('Pipeline started', { status: 200 })
-    }
-
-    if (command === 'ayuda' || command === 'help' || command === 'comandos') {
-        return new NextResponse(buildHelpMessage(), {
-            status: 200,
-            headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
-            },
         })
     }
 
-    return new NextResponse(
-        [
-            'No entendí ese comando.',
-            '',
-            buildHelpMessage(),
-        ].join('\n'),
-        {
-            status: 200,
-            headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
-            },
-        }
-    )
+    return NextResponse.json({ ok: true })
 }
