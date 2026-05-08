@@ -438,6 +438,292 @@ async function handleAppliedCommand(params: {
         .filter(Boolean)
         .join('\n')
 }
+function uniqueStrings(values: Array<string | null | undefined>) {
+    return Array.from(
+        new Set(
+            values
+                .filter(Boolean)
+                .map((value) => String(value).trim())
+                .filter(Boolean)
+        )
+    )
+}
+
+function buildAtsKeywords(item: SessionItemRow) {
+    const job = item.jobs
+    const match = item.job_matches
+
+    return uniqueStrings([
+        ...(job?.tech_tags ?? []),
+        ...(match?.reasons ?? [])
+            .filter((reason) => reason.toLowerCase().includes('coincide con'))
+            .map((reason) => reason.replace(/coincide con/i, '').replace(/"/g, '').trim()),
+        job?.modality,
+        job?.seniority,
+    ]).slice(0, 20)
+}
+
+function buildFitSummary(item: SessionItemRow) {
+    const job = item.jobs
+    const match = item.job_matches
+    const profile = item.search_profiles
+
+    if (!job || !match || !profile) {
+        return 'Oferta compatible con el perfil seleccionado.'
+    }
+
+    const reasons = normalizeReasons(match.reasons)
+
+    return [
+        `La oferta "${job.title}" en ${job.company} calza con el perfil "${profile.name}" por su orientación técnica y tecnologías detectadas.`,
+        '',
+        `Score: ${Math.round(match.score)}.`,
+        '',
+        'Señales principales:',
+        ...reasons.slice(0, 5).map((reason) => `- ${reason}`),
+    ].join('\n')
+}
+
+function buildCvImprovements(item: SessionItemRow) {
+    const job = item.jobs
+    const tags = job?.tech_tags ?? []
+
+    const improvements = [
+        'Ajustar el resumen profesional para destacar experiencia en desarrollo web full stack/backend.',
+        'Agregar logros concretos con tecnologías relacionadas al cargo.',
+        'Ordenar el stack técnico por relevancia para esta oferta.',
+    ]
+
+    if (tags.includes('node') || tags.includes('node.js')) {
+        improvements.push('Destacar experiencia creando APIs REST con Node.js.')
+    }
+
+    if (tags.includes('typescript')) {
+        improvements.push('Mencionar TypeScript en proyectos recientes y responsabilidades.')
+    }
+
+    if (tags.includes('sql') || tags.includes('postgresql')) {
+        improvements.push('Destacar experiencia con SQL/PostgreSQL y modelado de datos.')
+    }
+
+    if (tags.includes('react') || tags.includes('next.js')) {
+        improvements.push('Resaltar experiencia en React/Next.js y componentes reutilizables.')
+    }
+
+    return improvements.slice(0, 8)
+}
+
+function buildRecruiterMessage(item: SessionItemRow) {
+    const job = item.jobs
+
+    if (!job) {
+        return ''
+    }
+
+    return [
+        `Hola, vi la oferta de ${job.title} en ${job.company} y me interesa postular.`,
+        '',
+        'Tengo experiencia desarrollando soluciones web, APIs y sistemas con tecnologías como Node.js, TypeScript, React/Next.js y bases de datos SQL.',
+        '',
+        'Me gustaría conversar para contarles cómo mi perfil puede aportar al equipo.',
+        '',
+        'Saludos,',
+        'Martin Vergara',
+    ].join('\n')
+}
+
+function buildCoverLetter(item: SessionItemRow) {
+    const job = item.jobs
+
+    if (!job) {
+        return ''
+    }
+
+    return [
+        `Estimado equipo de ${job.company}:`,
+        '',
+        `Me interesa postular al cargo de ${job.title}. Mi perfil está orientado al desarrollo de aplicaciones web, backend, APIs y soluciones full stack, con foco en construir sistemas funcionales, mantenibles y alineados a las necesidades del negocio.`,
+        '',
+        'He trabajado con tecnologías como Node.js, TypeScript, React/Next.js y bases de datos SQL, además de participar en proyectos donde es importante entender requerimientos, resolver problemas y entregar soluciones prácticas.',
+        '',
+        'Me motiva la posibilidad de aportar al equipo, seguir creciendo profesionalmente y contribuir con responsabilidad desde el primer día.',
+        '',
+        'Quedo atento a la posibilidad de conversar.',
+        '',
+        'Saludos,',
+        'Martin Vergara',
+    ].join('\n')
+}
+
+function buildChecklist(item: SessionItemRow) {
+    const job = item.jobs
+
+    return [
+        {
+            label: 'Revisar que el CV destaque las tecnologías principales de la oferta.',
+            done: false,
+        },
+        {
+            label: 'Ajustar resumen profesional al cargo.',
+            done: false,
+        },
+        {
+            label: 'Copiar mensaje para recruiter o formulario.',
+            done: false,
+        },
+        {
+            label: 'Abrir link de postulación.',
+            done: false,
+        },
+        {
+            label: job?.url ? `Postular en: ${job.url}` : 'Postular en el link de la oferta.',
+            done: false,
+        },
+    ]
+}
+
+function buildPackReadyMessage(params: {
+    item: SessionItemRow
+    packId: string
+}) {
+    const { item } = params
+    const job = item.jobs
+    const profile = item.search_profiles
+
+    if (!job || !profile) {
+        return '✅ Pack generado, pero no pude cargar todo el detalle del empleo.'
+    }
+
+    return [
+        `🧠 Pack de postulación listo para Match ${item.item_number}`,
+        '',
+        `Cargo: ${job.title}`,
+        `Empresa: ${job.company}`,
+        `Perfil: ${profile.name}`,
+        '',
+        'Incluye:',
+        '- Resumen de calce',
+        '- Keywords ATS',
+        '- Mejoras sugeridas al CV',
+        '- Mensaje para recruiter',
+        '- Carta de presentación',
+        '- Checklist de postulación',
+        '',
+        'Siguiente paso:',
+        `match ${item.item_number} → revisar oferta`,
+        `aplicado ${item.item_number} → marcar como postulado cuando ya postules`,
+        '',
+        'Luego podemos agregar:',
+        `confirmar ${item.item_number} → aprobar pack antes de postular`,
+    ].join('\n')
+}
+
+async function handlePrepareCommand(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        if (result.reason === 'no_active_session') {
+            return [
+                'No tienes una sesión activa de matches.',
+                '',
+                'Primero responde:',
+                'run',
+            ].join('\n')
+        }
+
+        return `No encontré el match ${params.itemNumber}.`
+    }
+
+    const item = result.item
+    const job = item.jobs
+    const profile = item.search_profiles
+
+    if (!job || !profile) {
+        return '❌ No pude cargar los datos necesarios para preparar la postulación.'
+    }
+
+    const supabase = createAdminClient()
+    const now = new Date().toISOString()
+
+    const atsKeywords = buildAtsKeywords(item)
+    const fitSummary = buildFitSummary(item)
+    const cvImprovements = buildCvImprovements(item)
+    const recruiterMessage = buildRecruiterMessage(item)
+    const coverLetter = buildCoverLetter(item)
+    const checklist = buildChecklist(item)
+
+    const { data: pack, error: packError } = await supabase
+        .from('application_packs')
+        .upsert(
+            {
+                job_id: item.job_id,
+                profile_id: item.profile_id,
+                recommended_cv_variant: 'backend_fullstack_jr',
+                fit_summary: fitSummary,
+                ats_keywords: atsKeywords,
+                missing_keywords: [],
+                cv_improvements: cvImprovements,
+                cover_letter: coverLetter,
+                recruiter_message: recruiterMessage,
+                form_answers: [],
+                checklist,
+                generated_by: 'rules_whatsapp',
+                updated_at: now,
+            },
+            {
+                onConflict: 'job_id,profile_id',
+            }
+        )
+        .select('id')
+        .single()
+
+    if (packError) {
+        throw new Error(packError.message)
+    }
+
+    const { error: applicationError } = await supabase
+        .from('job_applications')
+        .upsert(
+            {
+                job_id: item.job_id,
+                profile_id: item.profile_id,
+                status: 'ready',
+                cv_variant: 'backend_fullstack_jr',
+                notes: 'Pack de postulación generado desde WhatsApp.',
+                source_notes: 'whatsapp_command:preparar',
+                updated_at: now,
+            },
+            {
+                onConflict: 'job_id,profile_id',
+            }
+        )
+
+    if (applicationError) {
+        throw new Error(applicationError.message)
+    }
+
+    const { error: matchError } = await supabase
+        .from('job_matches')
+        .update({
+            saved: true,
+        })
+        .eq('id', item.match_id)
+
+    if (matchError) {
+        throw new Error(matchError.message)
+    }
+
+    return buildPackReadyMessage({
+        item,
+        packId: pack.id,
+    })
+}
 
 type IncomingCommand = {
     from: string
@@ -804,6 +1090,32 @@ export async function POST(request: NextRequest): Promise<Response> {
                         'run',
                     ].join('\n'),
                 })
+            })
+
+            continue
+        }
+        if (matchCommand?.action === 'preparar') {
+            after(async () => {
+                try {
+                    const message = await handlePrepareCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude preparar el pack de postulación.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
             })
 
             continue
