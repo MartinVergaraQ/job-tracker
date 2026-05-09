@@ -1,14 +1,13 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { scoreJob } from '../core/score-job'
 import type { NormalizedJob, SearchProfile } from '../../types/job'
-
 import type { JobModality, JobSeniority } from '../../types/job'
 
 type JobRow = {
     id: string
     source_name: string
     source_type: string
-    external_id: string
+    external_id: string | null
     url: string
     title: string
     company: string
@@ -28,6 +27,12 @@ type RescoreResult = {
     matches_upserted: number
 }
 
+const DEFAULT_LIMIT = 250
+
+const EXCLUDED_SOURCES = new Set([
+    'duolaboral',
+])
+
 async function getActiveProfiles() {
     const supabase = createAdminClient()
 
@@ -44,24 +49,34 @@ async function getActiveProfiles() {
 function toNormalizedJob(job: JobRow): NormalizedJob {
     const VALID_SOURCE_TYPES = ['mock', 'api', 'rss', 'html', 'browser'] as const
     const VALID_MODALITIES: JobModality[] = ['remote', 'hybrid', 'onsite', 'unknown']
-    const VALID_SENIORITIES: JobSeniority[] = ['junior', 'semi-senior', 'senior', 'trainee', 'unknown']
+    const VALID_SENIORITIES: JobSeniority[] = [
+        'junior',
+        'semi-senior',
+        'senior',
+        'trainee',
+        'unknown',
+    ]
 
-    const sourceType = VALID_SOURCE_TYPES.includes(job.source_type as typeof VALID_SOURCE_TYPES[number])
-        ? (job.source_type as typeof VALID_SOURCE_TYPES[number])
+    const sourceType = VALID_SOURCE_TYPES.includes(
+        job.source_type as (typeof VALID_SOURCE_TYPES)[number]
+    )
+        ? (job.source_type as (typeof VALID_SOURCE_TYPES)[number])
         : 'html'
 
-    const modality: JobModality = job.modality && VALID_MODALITIES.includes(job.modality as JobModality)
-        ? (job.modality as JobModality)
-        : 'unknown'
+    const modality: JobModality =
+        job.modality && VALID_MODALITIES.includes(job.modality as JobModality)
+            ? (job.modality as JobModality)
+            : 'unknown'
 
-    const seniority: JobSeniority = job.seniority && VALID_SENIORITIES.includes(job.seniority as JobSeniority)
-        ? (job.seniority as JobSeniority)
-        : 'unknown'
+    const seniority: JobSeniority =
+        job.seniority && VALID_SENIORITIES.includes(job.seniority as JobSeniority)
+            ? (job.seniority as JobSeniority)
+            : 'unknown'
 
     return {
         source_name: job.source_name,
         source_type: sourceType,
-        external_id: job.external_id,
+        external_id: job.external_id ?? '',
         url: job.url,
         title: job.title,
         company: job.company,
@@ -76,7 +91,163 @@ function toNormalizedJob(job: JobRow): NormalizedJob {
     }
 }
 
-export async function rescoreDuolaboralJobs(limit = 30): Promise<RescoreResult> {
+function hasSeniorSenioritySignal(value: string) {
+    const text = value.toLowerCase()
+
+    return (
+        text.includes('semi senior') ||
+        text.includes('semisenior') ||
+        text.includes('semi-senior') ||
+        text.includes('senior') ||
+        text.includes(' sr ') ||
+        text.includes('sr.') ||
+        text.includes('lead') ||
+        text.includes('architect') ||
+        text.includes('arquitecto')
+    )
+}
+
+function isJuniorProfile(profile: SearchProfile) {
+    const text = `${profile.slug} ${profile.name} ${profile.preferred_seniority?.join(' ') ?? ''}`.toLowerCase()
+
+    return (
+        text.includes('junior') ||
+        text.includes('jr') ||
+        text.includes('trainee') ||
+        text.includes('practicante')
+    )
+}
+
+function getSeniorityPenalty(params: {
+    job: NormalizedJob
+    profile: SearchProfile
+}) {
+    const jobText = [
+        params.job.title,
+        params.job.seniority,
+        params.job.description ?? '',
+    ].join(' ')
+
+    if (!isJuniorProfile(params.profile)) {
+        return {
+            penalty: 0,
+            reason: null as string | null,
+        }
+    }
+
+    if (hasSeniorSenioritySignal(jobText)) {
+        return {
+            penalty: -80,
+            reason: 'Penalización: la oferta parece Senior/Semi Senior y el perfil es Junior.',
+        }
+    }
+
+    return {
+        penalty: 0,
+        reason: null as string | null,
+    }
+}
+
+function getStackMismatchPenalty(params: {
+    job: NormalizedJob
+    profile: SearchProfile
+}) {
+    const text = [
+        params.job.title,
+        params.job.description ?? '',
+        ...(params.job.tech_tags ?? []),
+    ]
+        .join(' ')
+        .toLowerCase()
+
+    const profileText = [
+        params.profile.slug,
+        params.profile.name,
+        ...(params.profile.include_keywords ?? []),
+    ]
+        .join(' ')
+        .toLowerCase()
+
+    const isMartinBackend =
+        profileText.includes('martin') ||
+        profileText.includes('backend') ||
+        profileText.includes('node') ||
+        profileText.includes('react') ||
+        profileText.includes('next')
+
+    const hasDotnetFocus =
+        text.includes('c#') ||
+        text.includes('.net') ||
+        text.includes('asp.net') ||
+        text.includes('dotnet')
+
+    const hasMainStack =
+        text.includes('node') ||
+        text.includes('react') ||
+        text.includes('next') ||
+        text.includes('typescript') ||
+        text.includes('javascript')
+
+    if (isMartinBackend && hasDotnetFocus && !hasMainStack) {
+        return {
+            penalty: -60,
+            reason: 'Penalización: oferta centrada en C#/.NET, fuera del stack principal del perfil.',
+        }
+    }
+
+    return {
+        penalty: 0,
+        reason: null as string | null,
+    }
+}
+
+function applyPostScoreRules(params: {
+    job: NormalizedJob
+    profile: SearchProfile
+    score: number
+    isMatch: boolean
+    reasons: string[]
+}) {
+    let score = params.score
+    const reasons = [...params.reasons]
+
+    const seniorityPenalty = getSeniorityPenalty({
+        job: params.job,
+        profile: params.profile,
+    })
+
+    score += seniorityPenalty.penalty
+
+    if (seniorityPenalty.reason) {
+        reasons.push(seniorityPenalty.reason)
+    }
+
+    const stackPenalty = getStackMismatchPenalty({
+        job: params.job,
+        profile: params.profile,
+    })
+
+    score += stackPenalty.penalty
+
+    if (stackPenalty.reason) {
+        reasons.push(stackPenalty.reason)
+    }
+
+    score = Math.max(0, Math.round(score))
+
+    const minScore = Number(params.profile.min_score ?? 60)
+    const isMatch = params.isMatch && score >= minScore
+
+    return {
+        score,
+        is_match: isMatch,
+        reasons,
+    }
+}
+
+export async function rescoreDuolaboralJobs(
+    limit = DEFAULT_LIMIT
+): Promise<RescoreResult> {
     const supabase = createAdminClient()
     const profiles = await getActiveProfiles()
 
@@ -99,9 +270,10 @@ export async function rescoreDuolaboralJobs(limit = 30): Promise<RescoreResult> 
             published_at,
             scraped_at
         `)
-        .eq('source_name', 'duolaboral')
+        .eq('is_active', true)
+        .eq('is_canonical', true)
         .not('description', 'is', null)
-        .order('published_at', { ascending: false })
+        .order('scraped_at', { ascending: false })
         .limit(limit)
 
     if (error) {
@@ -112,10 +284,22 @@ export async function rescoreDuolaboralJobs(limit = 30): Promise<RescoreResult> 
     let matchesUpserted = 0
 
     for (const rawJob of (jobs ?? []) as JobRow[]) {
+        if (EXCLUDED_SOURCES.has(rawJob.source_name)) {
+            continue
+        }
+
         const job = toNormalizedJob(rawJob)
 
         for (const profile of profiles) {
-            const result = scoreJob(job, profile)
+            const baseResult = scoreJob(job, profile)
+
+            const result = applyPostScoreRules({
+                job,
+                profile,
+                score: baseResult.score,
+                isMatch: baseResult.is_match,
+                reasons: baseResult.reasons,
+            })
 
             const { error: upsertError } = await supabase
                 .from('job_matches')

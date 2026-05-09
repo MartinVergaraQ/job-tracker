@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        const result = await rescoreDuolaboralJobs(30)
+        const result = await rescoreDuolaboralJobs(250)
 
         return NextResponse.json({
             ok: true,
