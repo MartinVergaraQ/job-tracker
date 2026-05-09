@@ -196,6 +196,12 @@ function sanitizeGeneratedPack(params: {
             supportedSkills,
             jobTags,
         })
+            .replace(/como\s+['"`“”‘’]{2}/gi, '')
+            .replace(/como\s+['"`“”‘’]\s*['"`“”‘’]/gi, '')
+            .replace(/iniciativas como\s*\./gi, 'proyectos relevantes.')
+            .replace(/\s{2,}/g, ' ')
+            .replace(/\s+\./g, '.')
+            .trim()
     }
 
     const recruiterMessage = clean(pack.recruiter_message)
@@ -217,10 +223,21 @@ function sanitizeGeneratedPack(params: {
             'Martin Vergara',
         ].join('\n')
 
+    const cleanedFitSummary = clean(pack.fit_summary)
+
+    const safeFitSummary =
+        cleanedFitSummary.length > 30
+            ? cleanedFitSummary
+            : [
+                `El perfil de Martin calza razonablemente con la oferta de ${source.job.title} en ${source.job.company}.`,
+                'La coincidencia principal está en el rol Full Stack Junior y en tecnologías como React, Next.js, Angular, TypeScript, Node.js, SQL y PostgreSQL.',
+                'Conviene postular si la oferta no exige experiencia avanzada en tecnologías que no están respaldadas por el CV.',
+            ].join(' ')
+
     return {
         recommended_cv_variant:
             pack.recommended_cv_variant || source.profile.slug || 'martin_backend_jr',
-        fit_summary: clean(pack.fit_summary),
+        fit_summary: safeFitSummary,
         ats_keywords: pack.ats_keywords
             .map((keyword) => clean(keyword))
             .filter(Boolean)
@@ -231,7 +248,8 @@ function sanitizeGeneratedPack(params: {
             .slice(0, 15),
         cv_improvements: pack.cv_improvements
             .map((item) => clean(item))
-            .filter(Boolean)
+            .filter((item) => item.length > 0)
+            .filter((item) => !item.includes("''"))
             .slice(0, 10),
         recruiter_message: safeRecruiterMessage,
         cover_letter: clean(pack.cover_letter),
@@ -270,6 +288,7 @@ function buildPrompt(params: GenerateApplicationPackParams) {
         '- Si faltan tecnologías principales de la oferta, el fit_summary debe decir "calce medio" o "calce bajo", no "buen ajuste".',
         '- El recruiter_message nunca debe firmar como profile.name. Debe firmar como "Martin Vergara".',
         '- No uses "Martin Backend / Full Stack Jr" como nombre del candidato.',
+        '- Si sugieres proyectos, menciona solo proyectos existentes en cvProfile.projects. Si no puedes identificar nombres concretos, di "proyectos reales de desarrollo web" sin inventar nombres.',
         '',
         'Formato JSON exacto:',
         JSON.stringify(
