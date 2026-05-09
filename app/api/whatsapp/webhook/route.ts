@@ -91,6 +91,7 @@ type WhatsAppWebhookPayload = {
         }>
     }>
 }
+
 type MatchCommand = {
     action:
     | 'match'
@@ -102,6 +103,7 @@ type MatchCommand = {
     | 'confirmar'
     | 'descartar'
     | 'aplicado'
+    | 'cvdoc'
     itemNumber: number
 }
 
@@ -182,9 +184,7 @@ type CvProfileRow = {
 }
 
 function parseMatchCommand(command: string): MatchCommand | null {
-    const match = command.match(
-        /^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado)\s+(\d+)$/
-    )
+    const match = command.match(/^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado|cvdoc)\s+(\d+)$/)
 
     if (!match) return null
 
@@ -252,6 +252,115 @@ function buildMatchDetailMessage(row: SessionItemRow) {
     ]
         .filter(Boolean)
         .join('\n')
+}
+
+async function handleCvDocCommand(params: {
+    recipient: string
+    itemNumber: number
+    baseUrl: string
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        return [
+            `No encontré el match ${params.itemNumber}.`,
+            '',
+            'Primero responde:',
+            'matches',
+            'o vuelve a correr:',
+            'run',
+        ].join('\n')
+    }
+
+    const item = result.item
+    const job = item.jobs
+    const profile = item.search_profiles
+
+    if (!job || !profile) {
+        return '❌ No pude cargar la información del match.'
+    }
+
+    const internalSecret = process.env.INTERNAL_API_SECRET
+
+    if (!internalSecret) {
+        return '❌ Falta INTERNAL_API_SECRET.'
+    }
+
+    const generateResponse = await fetch(`${params.baseUrl}/api/cv/generate`, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${internalSecret}`,
+            'Content-Type': 'application/json',
+        },
+        cache: 'no-store',
+        body: JSON.stringify({
+            jobId: item.job_id,
+            profileId: item.profile_id,
+        }),
+    })
+
+    const generateBody = await generateResponse.json().catch(() => null) as {
+        ok?: boolean
+        document?: {
+            id: string
+            title: string
+            format: string
+        }
+        error?: string
+    } | null
+
+    if (!generateResponse.ok || !generateBody?.ok || !generateBody.document?.id) {
+        return [
+            '❌ No pude generar el CV adaptado.',
+            '',
+            generateBody?.error ? `Error: ${generateBody.error}` : `Status: ${generateResponse.status}`,
+        ].join('\n')
+    }
+
+    const uploadResponse = await fetch(
+        `${params.baseUrl}/api/cv/documents/${generateBody.document.id}/upload-pdf`,
+        {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${internalSecret}`,
+            },
+            cache: 'no-store',
+        }
+    )
+
+    const uploadBody = await uploadResponse.json().catch(() => null) as {
+        ok?: boolean
+        document?: {
+            public_url?: string
+        }
+        error?: string
+    } | null
+
+    if (!uploadResponse.ok || !uploadBody?.ok || !uploadBody.document?.public_url) {
+        return [
+            '❌ Generé el CV, pero no pude subir el PDF.',
+            '',
+            uploadBody?.error ? `Error: ${uploadBody.error}` : `Status: ${uploadResponse.status}`,
+        ].join('\n')
+    }
+
+    return [
+        `📄 CV ATS listo para Match ${params.itemNumber}`,
+        '',
+        `Cargo: ${job.title}`,
+        `Empresa: ${job.company}`,
+        `Perfil: ${profile.name}`,
+        '',
+        'Descargar CV:',
+        uploadBody.document.public_url,
+        '',
+        'Siguiente paso:',
+        `confirmar ${params.itemNumber}`,
+        `aplicado ${params.itemNumber}`,
+    ].join('\n')
 }
 
 async function getSessionItemByNumber(params: {
@@ -1442,6 +1551,7 @@ function buildHelpMessage() {
         'mensaje 1 - ver mensaje para recruiter',
         'cv 1 - ver mejoras sugeridas al CV',
         'carta 1 - ver carta de presentación',
+        'cvdoc 1 - generar y descargar CV ATS en PDF',
         'confirmar 1 - aprobar pack antes de postular',
         'descartar 1 - descartar match',
         'aplicado 1 - marcar como postulado',
@@ -1838,6 +1948,27 @@ export async function POST(request: NextRequest): Promise<Response> {
                         ].join('\n'),
                     })
                 }
+            })
+
+            continue
+        }
+        if (matchCommand?.action === 'cvdoc') {
+            after(async () => {
+                await sendWhatsAppMessage({
+                    to: incoming.from,
+                    body: '📄 Generando CV ATS en PDF. Dame unos segundos...',
+                })
+
+                const message = await handleCvDocCommand({
+                    recipient: incoming.from,
+                    itemNumber: matchCommand.itemNumber,
+                    baseUrl,
+                })
+
+                await sendWhatsAppMessage({
+                    to: incoming.from,
+                    body: message,
+                })
             })
 
             continue
