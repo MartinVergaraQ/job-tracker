@@ -200,6 +200,52 @@ function getStackMismatchPenalty(params: {
         reason: null as string | null,
     }
 }
+function normalizeText(value: string) {
+    return value
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+}
+
+function getJobSearchText(job: NormalizedJob) {
+    return normalizeText(
+        [
+            job.title,
+            job.company,
+            job.location ?? '',
+            job.modality,
+            job.seniority,
+            job.salary_text ?? '',
+            job.description ?? '',
+            ...(job.tech_tags ?? []),
+        ].join(' ')
+    )
+}
+
+function getHardExcludeResult(params: {
+    job: NormalizedJob
+    profile: SearchProfile
+}) {
+    const text = getJobSearchText(params.job)
+
+    const excludedKeyword = (params.profile.exclude_keywords ?? []).find((keyword) => {
+        const normalizedKeyword = normalizeText(keyword)
+
+        return normalizedKeyword.length > 0 && text.includes(normalizedKeyword)
+    })
+
+    if (!excludedKeyword) {
+        return {
+            blocked: false,
+            reason: null as string | null,
+        }
+    }
+
+    return {
+        blocked: true,
+        reason: `Descartado: contiene keyword excluida del perfil: "${excludedKeyword}".`,
+    }
+}
 
 function applyPostScoreRules(params: {
     job: NormalizedJob
@@ -210,6 +256,23 @@ function applyPostScoreRules(params: {
 }) {
     let score = params.score
     const reasons = [...params.reasons]
+
+    const hardExclude = getHardExcludeResult({
+        job: params.job,
+        profile: params.profile,
+    })
+
+    if (hardExclude.blocked) {
+        if (hardExclude.reason) {
+            reasons.push(hardExclude.reason)
+        }
+
+        return {
+            score: 0,
+            is_match: false,
+            reasons,
+        }
+    }
 
     const seniorityPenalty = getSeniorityPenalty({
         job: params.job,

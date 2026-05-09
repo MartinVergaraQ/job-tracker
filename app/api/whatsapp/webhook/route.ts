@@ -368,6 +368,143 @@ async function handleMatchDetailCommand(params: {
 
     return buildMatchDetailMessage(result.item)
 }
+
+type TopMatchRow = {
+    id: string
+    score: number
+    job_id: string
+    profile_id: string
+    jobs: {
+        id: string
+        title: string
+        company: string
+        location: string | null
+        modality: string | null
+        url: string
+    } | null
+    search_profiles: {
+        id: string
+        name: string
+        slug: string
+    } | null
+}
+
+async function handleMatchesCommand(params: {
+    recipient: string
+    limit?: number
+}) {
+    const supabase = createAdminClient()
+    const limit = params.limit ?? 5
+
+    const { data: matches, error } = await supabase
+        .from('job_matches')
+        .select(`
+            id,
+            score,
+            job_id,
+            profile_id,
+            jobs (
+                id,
+                title,
+                company,
+                location,
+                modality,
+                url
+            ),
+            search_profiles (
+                id,
+                name,
+                slug
+            )
+        `)
+        .eq('is_match', true)
+        .eq('dismissed', false)
+        .gte('score', 80)
+        .order('score', { ascending: false })
+        .limit(20)
+
+    if (error) {
+        throw new Error(error.message)
+    }
+
+    const rows = ((matches ?? []) as unknown as TopMatchRow[])
+        .filter((row) => row.search_profiles?.slug === 'martin_backend_jr')
+        .slice(0, limit)
+
+    if (rows.length === 0) {
+        return {
+            message: [
+                'No encontré matches activos buenos en este momento.',
+                '',
+                'Puedes correr:',
+                'run',
+            ].join('\n'),
+        }
+    }
+
+    await supabase
+        .from('whatsapp_match_sessions')
+        .update({
+            status: 'closed',
+            updated_at: new Date().toISOString(),
+        })
+        .eq('recipient', params.recipient)
+        .eq('status', 'active')
+
+    const { data: session, error: sessionError } = await supabase
+        .from('whatsapp_match_sessions')
+        .insert({
+            recipient: params.recipient,
+            status: 'active',
+        })
+        .select('id')
+        .single()
+
+    if (sessionError) {
+        throw new Error(sessionError.message)
+    }
+
+    const sessionItems = rows.map((row, index) => ({
+        session_id: session.id,
+        item_number: index + 1,
+        match_id: row.id,
+        job_id: row.job_id,
+        profile_id: row.profile_id,
+    }))
+
+    const { error: itemsError } = await supabase
+        .from('whatsapp_match_session_items')
+        .insert(sessionItems)
+
+    if (itemsError) {
+        throw new Error(itemsError.message)
+    }
+
+    return {
+        sessionId: session.id,
+        message: [
+            `🚀 Encontré ${rows.length} matches buenos para revisar`,
+            '',
+            ...rows.flatMap((row, index) => {
+                const job = row.jobs
+                const profile = row.search_profiles
+
+                return [
+                    `${index + 1}. ${job?.title ?? 'Sin título'}`,
+                    `   ${job?.company ?? 'Empresa no indicada'} · ${job?.location ?? 'Ubicación no indicada'} · ${job?.modality ?? 'modalidad no indicada'}`,
+                    `   Score ${Math.round(row.score)} · Perfil: ${profile?.name ?? 'Sin perfil'}`,
+                ]
+            }),
+            '',
+            'Responde con:',
+            'match 1 → ver detalle',
+            'preparar 1 → generar pack de postulación',
+            'descartar 1 → descartar oferta',
+            'aplicado 1 → marcar como postulada',
+        ].join('\n'),
+    }
+}
+
 async function handleDismissCommand(params: {
     recipient: string
     itemNumber: number
@@ -704,13 +841,16 @@ function buildPackReadyMessage(params: {
         '- Checklist de postulación',
         '',
         'Siguiente paso:',
-        `match ${item.item_number} → revisar oferta`,
-        `aplicado ${item.item_number} → marcar como postulado cuando ya postules`,
+        `pack ${item.item_number} → ver pack completo`,
+        `mensaje ${item.item_number} → ver mensaje recruiter`,
+        `cv ${item.item_number} → ver mejoras CV`,
+        `carta ${item.item_number} → ver carta`,
+        `confirmar ${item.item_number} → aprobar pack`,
         '',
-        'Luego podemos agregar:',
-        `confirmar ${item.item_number} → aprobar pack antes de postular`,
+        `Cuando postules: aplicado ${item.item_number}`,
     ].join('\n')
 }
+
 async function getActiveCvProfile(profileId: string) {
     const supabase = createAdminClient()
 
@@ -769,12 +909,11 @@ async function handlePrepareCommand(params: {
     const item = result.item
     const job = item.jobs
     const profile = item.search_profiles
+    const cvProfile = await getActiveCvProfile(item.profile_id)
 
     if (!job || !profile) {
         return '❌ No pude cargar los datos necesarios para preparar la postulación.'
     }
-
-    const cvProfile = await getActiveCvProfile(item.profile_id)
 
     const supabase = createAdminClient()
     const now = new Date().toISOString()
@@ -871,7 +1010,7 @@ async function handlePrepareCommand(params: {
             {
                 job_id: item.job_id,
                 profile_id: item.profile_id,
-                status: 'ready',
+                status: 'saved',
                 cv_variant: 'backend_fullstack_jr',
                 notes: 'Pack de postulación generado desde WhatsApp.',
                 source_notes: 'whatsapp_command:preparar',
@@ -1597,19 +1736,31 @@ export async function POST(request: NextRequest): Promise<Response> {
 
         if (command === 'matches') {
             after(async () => {
-                await sendWhatsAppMessage({
-                    to: incoming.from,
-                    body: [
-                        'Todavía estamos conectando el comando matches.',
-                        '',
-                        'Por ahora usa:',
-                        'run',
-                    ].join('\n'),
-                })
+                try {
+                    const result = await handleMatchesCommand({
+                        recipient: incoming.from,
+                        limit: 5,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: result.message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ Error cargando matches.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
             })
 
             continue
         }
+
         if (matchCommand?.action === 'preparar') {
             after(async () => {
                 try {
