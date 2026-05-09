@@ -209,19 +209,18 @@ function sanitizeGeneratedPack(params: {
         .replace(/quedo atento a sus comentarios\.?/i, 'quedo atento para conversar.')
         .trim()
 
-    const safeRecruiterMessage =
-        recruiterMessage ||
-        [
-            `Hola, soy Martin Vergara, Desarrollador Full Stack Junior.`,
-            '',
-            `Vi la oferta de ${source.job.title} en ${source.job.company} y me interesa postular.`,
-            'Tengo experiencia con React, Next.js, Angular, TypeScript, Node.js, APIs REST, SQL y PostgreSQL, además de proyectos reales orientados a sistemas web y operación de negocio.',
-            '',
-            'Quedo atento para conversar.',
-            '',
-            'Saludos,',
-            'Martin Vergara',
-        ].join('\n')
+    const safeRecruiterMessage = [
+        'Estimados/as,',
+        '',
+        `Me interesa postular a la posición de ${source.job.title} en ${source.job.company}.`,
+        '',
+        'Mi perfil se alinea con la oferta, especialmente por mi experiencia con Node.js, React, Next.js, TypeScript, SQL y PostgreSQL.',
+        '',
+        'Quedo atento para conversar.',
+        '',
+        'Saludos,',
+        'Martin Vergara',
+    ].join('\n')
 
     const cleanedFitSummary = clean(pack.fit_summary)
 
