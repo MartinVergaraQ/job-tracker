@@ -1,6 +1,7 @@
 import { after, NextRequest, NextResponse } from 'next/server'
 import { sendWhatsAppMessage } from '@/lib/notifications/send-whatsapp-message'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { generateApplicationPackWithAI } from '@/lib/ai/generate-application-pack'
 
 export const maxDuration = 300
 
@@ -778,12 +779,58 @@ async function handlePrepareCommand(params: {
     const supabase = createAdminClient()
     const now = new Date().toISOString()
 
-    const atsKeywords = buildAtsKeywords(item)
-    const fitSummary = buildFitSummary(item)
-    const cvImprovements = buildCvImprovements(item, cvProfile)
-    const recruiterMessage = buildRecruiterMessage(item, cvProfile)
-    const coverLetter = buildCoverLetter(item, cvProfile)
-    const checklist = buildChecklist(item)
+    const aiEnabled = process.env.APPLICATION_PACK_AI_ENABLED === 'true'
+
+    let generatedPack = null
+
+    if (aiEnabled) {
+        generatedPack = await generateApplicationPackWithAI({
+            job: {
+                title: job.title,
+                company: job.company,
+                location: job.location,
+                modality: job.modality,
+                seniority: job.seniority,
+                salary_text: job.salary_text,
+                tech_tags: job.tech_tags,
+                description: job.description,
+                url: job.url,
+            },
+            profile: {
+                name: profile.name,
+                slug: profile.slug,
+            },
+            cvProfile: cvProfile
+                ? {
+                    headline: cvProfile.headline,
+                    summary: cvProfile.summary,
+                    skills: cvProfile.skills,
+                    experience: cvProfile.experience,
+                    projects: cvProfile.projects,
+                    education: cvProfile.education,
+                    languages: cvProfile.languages,
+                }
+                : null,
+            score: item.job_matches?.score ?? 0,
+            reasons: item.job_matches?.reasons ?? [],
+        })
+    }
+
+    const atsKeywords = generatedPack?.ats_keywords ?? buildAtsKeywords(item)
+    const fitSummary = generatedPack?.fit_summary ?? buildFitSummary(item)
+    const cvImprovements =
+        generatedPack?.cv_improvements ?? buildCvImprovements(item, cvProfile)
+    const recruiterMessage =
+        generatedPack?.recruiter_message ?? buildRecruiterMessage(item, cvProfile)
+    const coverLetter =
+        generatedPack?.cover_letter ?? buildCoverLetter(item, cvProfile)
+    const checklist = generatedPack?.checklist ?? buildChecklist(item)
+    const missingKeywords = generatedPack?.missing_keywords ?? []
+    const recommendedCvVariant =
+        generatedPack?.recommended_cv_variant ??
+        (cvProfile?.headline
+            ? 'backend_fullstack_jr_cv_profile'
+            : 'backend_fullstack_jr')
 
     const { data: pack, error: packError } = await supabase
         .from('application_packs')
@@ -791,18 +838,20 @@ async function handlePrepareCommand(params: {
             {
                 job_id: item.job_id,
                 profile_id: item.profile_id,
-                recommended_cv_variant: cvProfile?.headline
-                    ? 'backend_fullstack_jr_cv_profile'
-                    : 'backend_fullstack_jr',
+                recommended_cv_variant: recommendedCvVariant,
                 fit_summary: fitSummary,
                 ats_keywords: atsKeywords,
-                missing_keywords: [],
+                missing_keywords: missingKeywords,
                 cv_improvements: cvImprovements,
                 cover_letter: coverLetter,
                 recruiter_message: recruiterMessage,
                 form_answers: [],
                 checklist,
-                generated_by: cvProfile ? 'rules_whatsapp_cv_profile' : 'rules_whatsapp',
+                generated_by: generatedPack
+                    ? 'openai_whatsapp_cv_profile'
+                    : cvProfile
+                        ? 'rules_whatsapp_cv_profile'
+                        : 'rules_whatsapp',
                 updated_at: now,
             },
             {
