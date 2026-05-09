@@ -75,6 +75,14 @@ function extractGeminiText(data: GeminiResponse) {
     )
 }
 
+function normalizeText(value: string) {
+    return value
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+}
+
 function safeJsonParse(value: string): GeneratedApplicationPack {
     const cleaned = value
         .trim()
@@ -87,7 +95,7 @@ function safeJsonParse(value: string): GeneratedApplicationPack {
 
     return {
         recommended_cv_variant:
-            parsed.recommended_cv_variant || 'backend_fullstack_jr_ai',
+            parsed.recommended_cv_variant || 'martin_backend_jr',
         fit_summary: parsed.fit_summary || '',
         ats_keywords: Array.isArray(parsed.ats_keywords)
             ? parsed.ats_keywords.map(String).slice(0, 25)
@@ -109,6 +117,134 @@ function safeJsonParse(value: string): GeneratedApplicationPack {
     }
 }
 
+function cleanForbiddenPhrases(value: string) {
+    let output = value
+
+    const forbiddenPhrases = [
+        'Job Tracker Copilot',
+        'Imega Ventus',
+        'Adjunto mi CV',
+        'adjunto mi CV',
+        'Adjunto mi curriculum',
+        'adjunto mi curriculum',
+        'Adjunto mi currículum',
+        'adjunto mi currículum',
+        'Anexo mi CV',
+        'anexo mi CV',
+    ]
+
+    for (const phrase of forbiddenPhrases) {
+        output = output.split(phrase).join('')
+    }
+
+    return output
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/\s+\./g, '.')
+        .replace(/\s+,/g, ',')
+        .trim()
+}
+
+function removeUnsupportedTechClaims(params: {
+    value: string
+    supportedSkills: string[]
+    jobTags: string[]
+}) {
+    let output = params.value
+
+    const unsupportedTechs = ['AWS', 'Java', 'Go', 'Python', 'Docker']
+
+    for (const tech of unsupportedTechs) {
+        const normalizedTech = normalizeText(tech)
+
+        const isSupported = params.supportedSkills.some(
+            (skill) => normalizeText(skill) === normalizedTech
+        )
+
+        if (!isSupported) {
+            const regex = new RegExp(`\\b${tech}\\b`, 'gi')
+            output = output.replace(regex, '')
+        }
+    }
+
+    return output
+        .replace(/,\s*,/g, ',')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\s+,/g, ',')
+        .trim()
+}
+
+function getSupportedSkills(params: GenerateApplicationPackParams) {
+    return [
+        ...(params.cvProfile?.skills ?? []),
+        ...(params.job.tech_tags ?? []),
+    ].map(String)
+}
+
+function sanitizeGeneratedPack(params: {
+    pack: GeneratedApplicationPack
+    source: GenerateApplicationPackParams
+}): GeneratedApplicationPack {
+    const { pack, source } = params
+
+    const supportedSkills = getSupportedSkills(source)
+    const jobTags = source.job.tech_tags ?? []
+
+    function clean(value: string) {
+        return removeUnsupportedTechClaims({
+            value: cleanForbiddenPhrases(value),
+            supportedSkills,
+            jobTags,
+        })
+    }
+
+    const recruiterMessage = clean(pack.recruiter_message)
+        .replace(/para su revisión y quedo atento a sus comentarios\.?/i, 'y quedo atento para conversar.')
+        .replace(/quedo atento a sus comentarios\.?/i, 'quedo atento para conversar.')
+        .trim()
+
+    const safeRecruiterMessage =
+        recruiterMessage ||
+        [
+            `Hola, soy Martin Vergara, Desarrollador Full Stack Junior.`,
+            '',
+            `Vi la oferta de ${source.job.title} en ${source.job.company} y me interesa postular.`,
+            'Tengo experiencia con React, Next.js, Angular, TypeScript, Node.js, APIs REST, SQL y PostgreSQL, además de proyectos reales orientados a sistemas web y operación de negocio.',
+            '',
+            'Quedo atento para conversar.',
+            '',
+            'Saludos,',
+            'Martin Vergara',
+        ].join('\n')
+
+    return {
+        recommended_cv_variant:
+            pack.recommended_cv_variant || source.profile.slug || 'martin_backend_jr',
+        fit_summary: clean(pack.fit_summary),
+        ats_keywords: pack.ats_keywords
+            .map((keyword) => clean(keyword))
+            .filter(Boolean)
+            .slice(0, 25),
+        missing_keywords: pack.missing_keywords
+            .map((keyword) => clean(keyword))
+            .filter(Boolean)
+            .slice(0, 15),
+        cv_improvements: pack.cv_improvements
+            .map((item) => clean(item))
+            .filter(Boolean)
+            .slice(0, 10),
+        recruiter_message: safeRecruiterMessage,
+        cover_letter: clean(pack.cover_letter),
+        checklist: pack.checklist
+            .map((item) => ({
+                label: clean(item.label),
+                done: Boolean(item.done),
+            }))
+            .filter((item) => item.label.length > 0)
+            .slice(0, 8),
+    }
+}
+
 function buildPrompt(params: GenerateApplicationPackParams) {
     return [
         'Eres un asistente experto en postulaciones laborales ATS para Chile.',
@@ -119,11 +255,14 @@ function buildPrompt(params: GenerateApplicationPackParams) {
         '- No inventes empresas, cargos, proyectos, experiencia, años, clientes ni tecnologías.',
         '- Usa EXACTAMENTE el nombre de empresa recibido en job.company.',
         '- Usa EXACTAMENTE el cargo recibido en job.title.',
-        '- No cambies "Empresa comercial de Lampa" por otro nombre.',
+        '- No cambies el nombre de la empresa por otro nombre.',
         '- No menciones proyectos que no aparezcan explícitamente en cvProfile.',
-        '- No digas que el candidato tiene AWS, Java, Go, Python o Docker si no aparece respaldado en el CV/perfil.',
+        '- El proyecto "Job Tracker Copilot" NO debe mencionarse a menos que aparezca explícitamente en cvProfile.',
+        '- No digas que el candidato tiene AWS, Java, Go, Python o Docker si no aparece respaldado en cvProfile.skills.',
         '- Si una tecnología aparece en la oferta pero no está respaldada por el CV/perfil, ponla en missing_keywords.',
         '- Las mejoras del CV deben ser sugerencias, no afirmaciones falsas.',
+        '- No uses frases como "Adjunto mi CV", porque el sistema todavía no adjunta archivos automáticamente.',
+        '- Para el mensaje recruiter usa una frase neutral como "Quedo atento para conversar".',
         '- El mensaje recruiter debe ser breve, honesto y listo para copiar.',
         '- La carta debe ser formal, humana y sin exagerar.',
         '- Devuelve SOLO JSON válido. Sin markdown. Sin explicación.',
@@ -182,7 +321,7 @@ export async function generateApplicationPackWithAI(
                     },
                 ],
                 generationConfig: {
-                    temperature: 0.1,
+                    temperature: 0,
                     responseMimeType: 'application/json',
                 },
             }),
@@ -203,5 +342,10 @@ export async function generateApplicationPackWithAI(
         throw new Error('Gemini returned empty response')
     }
 
-    return safeJsonParse(text)
+    const pack = safeJsonParse(text)
+
+    return sanitizeGeneratedPack({
+        pack,
+        source: params,
+    })
 }
