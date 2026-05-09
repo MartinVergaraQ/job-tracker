@@ -266,6 +266,10 @@ function buildPrompt(params: GenerateApplicationPackParams) {
         '- El mensaje recruiter debe ser breve, honesto y listo para copiar.',
         '- La carta debe ser formal, humana y sin exagerar.',
         '- Devuelve SOLO JSON válido. Sin markdown. Sin explicación.',
+        '- Si la oferta está centrada en Java, Spring Boot, Go, .NET, C#, AWS o DevOps y el CV no respalda esas tecnologías, NO digas que es buen ajuste.',
+        '- Si faltan tecnologías principales de la oferta, el fit_summary debe decir "calce medio" o "calce bajo", no "buen ajuste".',
+        '- El recruiter_message nunca debe firmar como profile.name. Debe firmar como "Martin Vergara".',
+        '- No uses "Martin Backend / Full Stack Jr" como nombre del candidato.',
         '',
         'Formato JSON exacto:',
         JSON.stringify(

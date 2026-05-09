@@ -175,23 +175,68 @@ function getStackMismatchPenalty(params: {
         profileText.includes('react') ||
         profileText.includes('next')
 
+    const hasMainStack =
+        text.includes('node') ||
+        text.includes('node.js') ||
+        text.includes('react') ||
+        text.includes('next') ||
+        text.includes('next.js') ||
+        text.includes('typescript') ||
+        text.includes('javascript') ||
+        text.includes('php') ||
+        text.includes('laravel') ||
+        text.includes('angular')
+
     const hasDotnetFocus =
         text.includes('c#') ||
         text.includes('.net') ||
         text.includes('asp.net') ||
         text.includes('dotnet')
 
-    const hasMainStack =
-        text.includes('node') ||
-        text.includes('react') ||
-        text.includes('next') ||
-        text.includes('typescript') ||
-        text.includes('javascript')
+    const hasJavaFocus =
+        text.includes('java') ||
+        text.includes('spring') ||
+        text.includes('spring boot') ||
+        text.includes('j2ee') ||
+        text.includes('microservicios java')
+
+    const hasCloudHeavyFocus =
+        text.includes('aws') ||
+        text.includes('azure') ||
+        text.includes('gcp') ||
+        text.includes('kubernetes') ||
+        text.includes('terraform')
+
+    const hasGoFocus =
+        text.includes(' golang ') ||
+        text.includes(' go ') ||
+        text.includes('go developer')
 
     if (isMartinBackend && hasDotnetFocus && !hasMainStack) {
         return {
+            penalty: -90,
+            reason: 'Penalización fuerte: oferta centrada en C#/.NET, fuera del stack principal del perfil.',
+        }
+    }
+
+    if (isMartinBackend && hasJavaFocus && !hasMainStack) {
+        return {
+            penalty: -90,
+            reason: 'Penalización fuerte: oferta centrada en Java/Spring, fuera del stack principal del perfil.',
+        }
+    }
+
+    if (isMartinBackend && hasGoFocus && !hasMainStack) {
+        return {
+            penalty: -80,
+            reason: 'Penalización fuerte: oferta centrada en Go/Golang, fuera del stack principal del perfil.',
+        }
+    }
+
+    if (isMartinBackend && hasCloudHeavyFocus && !hasMainStack) {
+        return {
             penalty: -60,
-            reason: 'Penalización: oferta centrada en C#/.NET, fuera del stack principal del perfil.',
+            reason: 'Penalización: oferta muy centrada en cloud/devops sin stack principal del perfil.',
         }
     }
 
@@ -200,6 +245,7 @@ function getStackMismatchPenalty(params: {
         reason: null as string | null,
     }
 }
+
 function normalizeText(value: string) {
     return value
         .toLowerCase()
