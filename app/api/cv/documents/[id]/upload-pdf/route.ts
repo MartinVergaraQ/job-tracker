@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { renderHtmlToPdf } from '@/lib/pdf/render-html-to-pdf'
 import { uploadCvPdf } from '@/lib/storage/upload-cv-pdf'
 
 export const maxDuration = 60
@@ -38,6 +37,8 @@ function safeFilename(value: string) {
         .replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-zA-Z0-9-_ ]/g, '')
         .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
         .toLowerCase()
         .slice(0, 90)
 }
@@ -91,7 +92,22 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         )
     }
 
-    const pdfBytes = await renderHtmlToPdf(html)
+    let pdfBytes: Uint8Array
+
+    try {
+        const { renderHtmlToPdf } = await import('@/lib/pdf/render-html-to-pdf')
+        pdfBytes = await renderHtmlToPdf(html)
+    } catch (error) {
+        return NextResponse.json(
+            {
+                ok: false,
+                step: 'render_pdf_import_or_render',
+                error: error instanceof Error ? error.message : 'Unknown PDF render error',
+            },
+            { status: 500 }
+        )
+    }
+
     const pdf = Buffer.from(pdfBytes)
 
     const relatedJob = Array.isArray(document.jobs)
@@ -102,12 +118,29 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const company = relatedJob?.company ?? 'empresa'
     const filename = `CV Martin Vergara - ${jobTitle} - ${company}`
 
-    const uploaded = await uploadCvPdf({
-        profileId: document.profile_id,
-        jobId: document.job_id,
-        filename: `${safeFilename(filename)}.pdf`,
-        pdf,
-    })
+    let uploaded: {
+        bucket: string
+        filePath: string
+        publicUrl: string
+    }
+
+    try {
+        uploaded = await uploadCvPdf({
+            profileId: document.profile_id,
+            jobId: document.job_id,
+            filename: `${safeFilename(filename)}.pdf`,
+            pdf,
+        })
+    } catch (error) {
+        return NextResponse.json(
+            {
+                ok: false,
+                step: 'upload_pdf',
+                error: error instanceof Error ? error.message : 'Unknown upload error',
+            },
+            { status: 500 }
+        )
+    }
 
     const { error: updateError } = await supabase
         .from('cv_documents')
@@ -121,7 +154,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     if (updateError) {
         return NextResponse.json(
-            { ok: false, error: updateError.message },
+            {
+                ok: false,
+                step: 'update_cv_document',
+                error: updateError.message,
+            },
             { status: 500 }
         )
     }
