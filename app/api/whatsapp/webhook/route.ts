@@ -334,6 +334,10 @@ async function handleCvDocCommand(params: {
     const uploadBody = await uploadResponse.json().catch(() => null) as {
         ok?: boolean
         document?: {
+            id?: string
+            title?: string
+            format?: string
+            file_path?: string
             public_url?: string
         }
         error?: string
@@ -346,6 +350,25 @@ async function handleCvDocCommand(params: {
             uploadBody?.error ? `Error: ${uploadBody.error}` : `Status: ${uploadResponse.status}`,
         ].join('\n')
     }
+    const supabase = createAdminClient()
+
+    await supabase
+        .from('job_applications')
+        .upsert(
+            {
+                job_id: item.job_id,
+                profile_id: item.profile_id,
+                status: 'ready',
+                cv_document_id: uploadBody.document.id,
+                cv_public_url: uploadBody.document.public_url,
+                notes: 'CV ATS PDF generado desde WhatsApp. Listo para revisar y postular.',
+                source_notes: 'whatsapp_command:cvdoc',
+                updated_at: new Date().toISOString(),
+            },
+            {
+                onConflict: 'job_id,profile_id',
+            }
+        )
 
     return [
         `📄 CV ATS listo para Match ${params.itemNumber}`,
@@ -357,9 +380,12 @@ async function handleCvDocCommand(params: {
         'Descargar CV:',
         uploadBody.document.public_url,
         '',
+        'Estado guardado:',
+        'ready',
+        '',
         'Siguiente paso:',
-        `confirmar ${params.itemNumber}`,
-        `aplicado ${params.itemNumber}`,
+        `confirmar ${params.itemNumber} → aprobar CV y pack`,
+        `aplicado ${params.itemNumber} → marcar como postulado cuando ya postules`,
     ].join('\n')
 }
 
