@@ -142,6 +142,25 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         )
     }
 
+    const { error: deletePreviousPdfError } = await supabase
+        .from('cv_documents')
+        .delete()
+        .eq('job_id', document.job_id)
+        .eq('profile_id', document.profile_id)
+        .eq('format', 'pdf')
+        .neq('id', document.id)
+
+    if (deletePreviousPdfError) {
+        return NextResponse.json(
+            {
+                ok: false,
+                step: 'delete_previous_pdf_document',
+                error: deletePreviousPdfError.message,
+            },
+            { status: 500 }
+        )
+    }
+
     const { error: updateError } = await supabase
         .from('cv_documents')
         .update({
