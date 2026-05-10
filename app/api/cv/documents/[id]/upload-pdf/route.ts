@@ -91,7 +91,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         )
     }
 
-    const pdf = await renderHtmlToPdf(html)
+    const pdfBytes = await renderHtmlToPdf(html)
+    const pdf = Buffer.from(pdfBytes)
 
     const relatedJob = Array.isArray(document.jobs)
         ? document.jobs[0]
