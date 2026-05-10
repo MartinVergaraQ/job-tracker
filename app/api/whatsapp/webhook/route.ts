@@ -954,6 +954,7 @@ function buildPackReadyMessage(params: {
         `mensaje ${item.item_number} → ver mensaje recruiter`,
         `cv ${item.item_number} → ver mejoras CV`,
         `carta ${item.item_number} → ver carta`,
+        `cvdoc ${item.item_number} → generar CV ATS en PDF`,
         `confirmar ${item.item_number} → aprobar pack`,
         '',
         `Cuando postules: aplicado ${item.item_number}`,
@@ -1267,6 +1268,7 @@ function buildPackMessage(params: {
             `mensaje ${item.item_number} → ver solo mensaje recruiter`,
             `cv ${item.item_number} → ver mejoras CV`,
             `carta ${item.item_number} → ver carta`,
+            `cvdoc ${item.item_number} → generar CV ATS en PDF`,
             `aplicado ${item.item_number} → marcar postulado`,
         ].join('\n'),
         3500
@@ -1475,8 +1477,11 @@ async function handleConfirmCommand(params: {
         'Estado guardado:',
         'approved',
         '',
-        'Siguiente paso:',
-        job?.url ? `Postula aquí:\n${job.url}` : 'Abre el link de la oferta desde match.',
+        'Siguiente paso recomendado:',
+        `cvdoc ${params.itemNumber} → generar CV ATS en PDF`,
+        '',
+        'Después postula aquí:',
+        job?.url ? job.url : 'Abre el link de la oferta desde match.',
         '',
         `Cuando postules, responde: aplicado ${params.itemNumber}`,
     ]
@@ -1954,21 +1959,32 @@ export async function POST(request: NextRequest): Promise<Response> {
         }
         if (matchCommand?.action === 'cvdoc') {
             after(async () => {
-                await sendWhatsAppMessage({
-                    to: incoming.from,
-                    body: '📄 Generando CV ATS en PDF. Dame unos segundos...',
-                })
+                try {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: '📄 Generando CV ATS en PDF. Dame unos segundos...',
+                    })
 
-                const message = await handleCvDocCommand({
-                    recipient: incoming.from,
-                    itemNumber: matchCommand.itemNumber,
-                    baseUrl,
-                })
+                    const message = await handleCvDocCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                        baseUrl,
+                    })
 
-                await sendWhatsAppMessage({
-                    to: incoming.from,
-                    body: message,
-                })
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude generar el CV ATS en PDF.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
             })
 
             continue
