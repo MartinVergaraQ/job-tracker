@@ -3,31 +3,24 @@ import puppeteer from 'puppeteer-core'
 
 async function getExecutablePath() {
     if (process.env.VERCEL === '1') {
-        return chromium.executablePath()
+        return await chromium.executablePath()
     }
 
     if (process.env.CHROME_EXECUTABLE_PATH) {
         return process.env.CHROME_EXECUTABLE_PATH
     }
 
-    const possibleWindowsPaths = [
-        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    ]
-
-    return possibleWindowsPaths[0]
+    return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 }
 
-export async function renderHtmlToPdf(html: string) {
+export async function renderHtmlToPdf(html: string): Promise<Uint8Array> {
     const executablePath = await getExecutablePath()
+    const isVercel = process.env.VERCEL === '1'
 
     const browser = await puppeteer.launch({
-        args:
-            process.env.VERCEL === '1'
-                ? chromium.args
-                : ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: isVercel
+            ? chromium.args
+            : ['--no-sandbox', '--disable-setuid-sandbox'],
         defaultViewport: {
             width: 1200,
             height: 1600,
