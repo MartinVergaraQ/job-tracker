@@ -107,6 +107,7 @@ function hasSeniorSenioritySignal(value: string) {
     )
 }
 
+
 function isJuniorProfile(profile: SearchProfile) {
     const text = `${profile.slug} ${profile.name} ${profile.preferred_seniority?.join(' ') ?? ''}`.toLowerCase()
 

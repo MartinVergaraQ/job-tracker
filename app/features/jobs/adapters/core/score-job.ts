@@ -150,6 +150,36 @@ function buildTitleText(job: NormalizedJob) {
     return normalizeText(job.title)
 }
 
+function hasExactTitleSignal(title: string, signals: string[]) {
+    const normalizedTitle = normalizeText(title)
+
+    return signals.some((signal) => {
+        const normalizedSignal = normalizeText(signal)
+
+        if (!normalizedSignal) return false
+
+        const pattern = new RegExp(`(^|\\s|/|-)${normalizedSignal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|/|-|$)`, 'i')
+
+        return pattern.test(normalizedTitle)
+    })
+}
+
+function profileIsStrictJunior(profile: SearchProfile) {
+    const text = normalizeText(
+        [
+            profile.slug,
+            profile.name,
+            ...(profile.preferred_seniority ?? []),
+        ].join(' ')
+    )
+
+    return (
+        text.includes('junior') ||
+        text.includes('jr') ||
+        text.includes('trainee')
+    )
+}
+
 function profileAllowsSenior(profile: SearchProfile) {
     return profile.preferred_seniority.some((level) =>
         ['senior', 'lead', 'staff', 'principal'].includes(
@@ -179,24 +209,28 @@ function seniorityRules(job: NormalizedJob, profile: SearchProfile): RuleResult 
     let hardReject = false
 
     const hasJunior = includesAny(title, JUNIOR_SIGNALS) || includesAny(text, JUNIOR_SIGNALS)
-    const hasMid = includesAny(title, MID_SIGNALS) || includesAny(text, MID_SIGNALS)
-    const hasSenior = includesAny(title, SENIOR_SIGNALS)
+
+    const hasMidInTitle = hasExactTitleSignal(title, MID_SIGNALS)
+    const hasSeniorInTitle = hasExactTitleSignal(title, SENIOR_SIGNALS)
+
     const allowsSenior = profileAllowsSenior(profile)
+    const strictJunior = profileIsStrictJunior(profile)
+
+    if (hasSeniorInTitle && !allowsSenior) {
+        score -= 150
+        hardReject = true
+        reasons.push('Descartado: cargo Senior/Lead no compatible con perfil Junior')
+    }
+
+    if (hasMidInTitle && strictJunior) {
+        score -= 110
+        hardReject = true
+        reasons.push('Descartado: cargo Semi Senior no compatible con perfil Junior actual')
+    }
 
     if (hasJunior) {
-        score += 28
+        score += 32
         reasons.push('Señal fuerte: oferta Junior/Trainee')
-    }
-
-    if (hasMid) {
-        score += 10
-        reasons.push('Señal aceptable: Semi Senior')
-    }
-
-    if (hasSenior && !allowsSenior && !hasJunior) {
-        score -= 90
-        hardReject = true
-        reasons.push('Descartado: cargo Senior/Lead no compatible con perfil actual')
     }
 
     if (
