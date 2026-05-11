@@ -1,216 +1,225 @@
 type GenerateAdaptedCvParams = {
-    job: {
-        title: string
-        company: string
-        location: string | null
-        modality: string | null
-        seniority: string | null
-        description: string | null
-        tech_tags: string[] | null
-        url: string
-    }
-    profile: {
-        name: string
-        slug: string
-    }
-    cvProfile: {
-        headline?: string | null
-        summary?: string | null
-        skills?: string[] | null
-        experience?: unknown
-        projects?: unknown
-        education?: unknown
-        languages?: unknown
-    } | null
-    applicationPack?: {
-        fit_summary?: string | null
-        ats_keywords?: string[] | null
-        missing_keywords?: string[] | null
-        cv_improvements?: string[] | null
-    } | null
+  job: {
+    title: string
+    company: string
+    location: string | null
+    modality: string | null
+    seniority: string | null
+    description: string | null
+    tech_tags: string[] | null
+    url: string
+  }
+  profile: {
+    name: string
+    slug: string
+  }
+  cvProfile: {
+    headline?: string | null
+    summary?: string | null
+    skills?: string[] | null
+    experience?: unknown
+    projects?: unknown
+    education?: unknown
+    languages?: unknown
+  } | null
+  applicationPack?: {
+    fit_summary?: string | null
+    ats_keywords?: string[] | null
+    missing_keywords?: string[] | null
+    cv_improvements?: string[] | null
+  } | null
 }
 
 export type AdaptedCvResult = {
-    title: string
-    html: string
-    contentJson: {
-        candidate_name: string
-        headline: string
-        target_role: string
-        target_company: string
-        summary: string
-        skills: string[]
-        experience: unknown
-        projects: unknown
-        education: unknown
-        languages: unknown
-        ats_keywords: string[]
-        missing_keywords: string[]
-    }
+  title: string
+  html: string
+  contentJson: {
+    candidate_name: string
+    headline: string
+    target_role: string
+    target_company: string
+    summary: string
+    skills: string[]
+    experience: unknown
+    projects: unknown
+    education: unknown
+    languages: unknown
+    ats_keywords: string[]
+    missing_keywords: string[]
+  }
 }
 
 type GeminiResponse = {
-    candidates?: Array<{
-        content?: {
-            parts?: Array<{
-                text?: string
-            }>
-        }
-    }>
-    error?: {
-        message?: string
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string
+      }>
     }
+  }>
+  error?: {
+    message?: string
+  }
 }
 
 function getRequiredEnv(name: string) {
-    const value = process.env[name]?.trim()
+  const value = process.env[name]?.trim()
 
-    if (!value) {
-        throw new Error(`Missing ${name}`)
-    }
+  if (!value) {
+    throw new Error(`Missing ${name}`)
+  }
 
-    return value
+  return value
 }
 
 function extractGeminiText(data: GeminiResponse) {
-    return (
-        data.candidates?.[0]?.content?.parts
-            ?.map((part) => part.text)
-            .filter(Boolean)
-            .join('\n') ?? ''
-    )
+  return (
+    data.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text)
+      .filter(Boolean)
+      .join('\n') ?? ''
+  )
 }
 
 function cleanJsonText(value: string) {
-    return value
-        .trim()
-        .replace(/^```json/i, '')
-        .replace(/^```/i, '')
-        .replace(/```$/i, '')
-        .trim()
+  return value
+    .trim()
+    .replace(/^```json/i, '')
+    .replace(/^```/i, '')
+    .replace(/```$/i, '')
+    .trim()
 }
 
 function escapeHtml(value: string) {
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;')
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
 }
 
 function asStringArray(value: unknown, fallback: string[] = []) {
-    if (!Array.isArray(value)) return fallback
+  if (!Array.isArray(value)) return fallback
 
-    return value
-        .map(String)
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, 40)
+  return value
+    .map(String)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 40)
 }
 
 function buildPrompt(params: GenerateAdaptedCvParams) {
-    return [
-        'Eres un experto en CV ATS para postulaciones tech en Chile.',
-        '',
-        'Debes adaptar el CV base del candidato a la oferta laboral indicada.',
-        '',
-        'REGLAS CRÍTICAS:',
-        '- No inventes experiencia, años, empresas, certificaciones, métricas ni tecnologías.',
-        '- No digas que el candidato domina una tecnología si no aparece respaldada en cvProfile.skills, cvProfile.experience o cvProfile.projects.',
-        '- Puedes reordenar, resumir y mejorar redacción, pero no crear hechos falsos.',
-        '- Si una tecnología aparece en la oferta pero no está respaldada, ponla en missing_keywords.',
-        '- El CV debe ser ATS friendly: claro, simple, sin tablas complejas, sin emojis.',
-        '- El candidato se llama Martin Vergara.',
-        '- No firmes ni nombres al candidato como profile.name.',
-        '- Puedes usar "Job Tracker / Job Application Copilot" solo si aparece en cvProfile.projects.',
-        '- Devuelve SOLO JSON válido. Sin markdown.',
-        '- El CV final debe caber idealmente en 2 páginas.',
-        '- Usa máximo 4 bullets para experiencia laboral.',
-        '- Usa máximo 4 proyectos destacados.',
-        '- Usa máximo 3 bullets por proyecto.',
-        '- Prioriza proyectos relacionados con la oferta y elimina proyectos menos relevantes si sobra contenido.',
-        '- No incluyas tecnologías no respaldadas como skills principales; si aparecen solo en la oferta, van a missing_keywords.',
-        '',
-        'Formato JSON exacto:',
-        JSON.stringify(
-            {
-                candidate_name: 'Martin Vergara',
-                headline: 'string',
-                target_role: 'string',
-                target_company: 'string',
-                summary: 'string',
-                skills: ['string'],
-                experience: [
-                    {
-                        role: 'string',
-                        company: 'string',
-                        period: 'string',
-                        stack: ['string'],
-                        bullets: ['string']
-                    }
-                ],
-                projects: [
-                    {
-                        name: 'string',
-                        stack: ['string'],
-                        bullets: ['string']
-                    }
-                ],
-                education: [
-                    {
-                        degree: 'string',
-                        institution: 'string',
-                        period: 'string'
-                    }
-                ],
-                languages: [
-                    {
-                        name: 'string',
-                        level: 'string'
-                    }
-                ],
-                ats_keywords: ['string'],
-                missing_keywords: ['string']
-            },
-            null,
-            2
-        ),
-        '',
-        'Datos oficiales:',
-        JSON.stringify(params, null, 2),
-    ].join('\n')
+  return [
+    'Eres un experto en CV ATS para postulaciones tech en Chile.',
+    '',
+    'Debes adaptar el CV base del candidato a la oferta laboral indicada.',
+    '',
+    'REGLAS DE REDACCIÓN:',
+    '- No uses frases genéricas como "calce medio", "perfil sólido" o "demuestra su capacidad" dentro del CV.',
+    '- No incluyas una sección visible llamada "Keywords ATS priorizadas".',
+    '- PHP debe aparecer solo como experiencia práctica/proyecto, no como especialidad principal del candidato.',
+    '- El foco principal del candidato es Node.js, SQL, Supabase, React, Next.js, Angular y TypeScript.',
+    '- El idioma inglés debe redactarse como "Lectura técnica básica", no como A2.',
+    '- El CV debe sonar humano, directo y profesional, no como texto generado por IA.',
+    '- Prioriza experiencia real, proyectos reales y tecnologías respaldadas.',
+    '',
+    'REGLAS CRÍTICAS:',
+    '- No inventes experiencia, años, empresas, certificaciones, métricas ni tecnologías.',
+    '- No digas que el candidato domina una tecnología si no aparece respaldada en cvProfile.skills, cvProfile.experience o cvProfile.projects.',
+    '- Puedes reordenar, resumir y mejorar redacción, pero no crear hechos falsos.',
+    '- Si una tecnología aparece en la oferta pero no está respaldada, ponla en missing_keywords.',
+    '- El CV debe ser ATS friendly: claro, simple, sin tablas complejas, sin emojis.',
+    '- El candidato se llama Martin Vergara.',
+    '- No firmes ni nombres al candidato como profile.name.',
+    '- Puedes usar "Job Tracker / Job Application Copilot" solo si aparece en cvProfile.projects.',
+    '- Devuelve SOLO JSON válido. Sin markdown.',
+    '- El CV final debe caber idealmente en 2 páginas.',
+    '- Usa máximo 4 bullets para experiencia laboral.',
+    '- Usa máximo 4 proyectos destacados.',
+    '- Usa máximo 3 bullets por proyecto.',
+    '- Prioriza proyectos relacionados con la oferta y elimina proyectos menos relevantes si sobra contenido.',
+    '- No incluyas tecnologías no respaldadas como skills principales; si aparecen solo en la oferta, van a missing_keywords.',
+    '',
+    'Formato JSON exacto:',
+    JSON.stringify(
+      {
+        candidate_name: 'Martin Vergara',
+        headline: 'Desarrollador Full Stack Junior | Node.js, React, TypeScript, SQL',
+        target_role: 'string',
+        target_company: 'string',
+        summary: 'string',
+        skills: ['string'],
+        experience: [
+          {
+            role: 'string',
+            company: 'string',
+            period: 'string',
+            stack: ['string'],
+            bullets: ['string']
+          }
+        ],
+        projects: [
+          {
+            name: 'string',
+            stack: ['string'],
+            bullets: ['string']
+          }
+        ],
+        education: [
+          {
+            degree: 'string',
+            institution: 'string',
+            period: 'string'
+          }
+        ],
+        languages: [
+          {
+            name: 'string',
+            level: 'string'
+          }
+        ],
+        ats_keywords: ['string'],
+        missing_keywords: ['string']
+      },
+      null,
+      2
+    ),
+    '',
+    'Datos oficiales:',
+    JSON.stringify(params, null, 2),
+  ].join('\n')
 }
 function takeCleanStrings(value: unknown, limit: number) {
-    if (!Array.isArray(value)) return []
+  if (!Array.isArray(value)) return []
 
-    return value
-        .map(String)
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, limit)
+  return value
+    .map(String)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit)
 }
 
 function renderList(items: string[], limit = 4) {
-    return items
-        .slice(0, limit)
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join('')
+  return items
+    .slice(0, limit)
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join('')
 }
 
 function renderExperience(value: unknown) {
-    if (!Array.isArray(value)) return ''
+  if (!Array.isArray(value)) return ''
 
-    return value
-        .slice(0, 1)
-        .map((item) => {
-            const role = String(item?.role ?? '').trim()
-            const company = String(item?.company ?? '').trim()
-            const period = String(item?.period ?? '').trim()
-            const stack = takeCleanStrings(item?.stack, 8)
-            const bullets = takeCleanStrings(item?.bullets, 4)
+  return value
+    .slice(0, 1)
+    .map((item) => {
+      const role = String(item?.role ?? '').trim()
+      const company = String(item?.company ?? '').trim()
+      const period = String(item?.period ?? '').trim()
+      const stack = takeCleanStrings(item?.stack, 8)
+      const bullets = takeCleanStrings(item?.bullets, 4)
 
-            return `
+      return `
               <article>
                 <h3>${escapeHtml(role)}${company ? ` | ${escapeHtml(company)}` : ''}</h3>
                 ${period ? `<p class="muted">${escapeHtml(period)}</p>` : ''}
@@ -218,43 +227,43 @@ function renderExperience(value: unknown) {
                 ${bullets.length ? `<ul>${renderList(bullets, 4)}</ul>` : ''}
               </article>
             `
-        })
-        .join('')
+    })
+    .join('')
 }
 
 function renderProjects(value: unknown) {
-    if (!Array.isArray(value)) return ''
+  if (!Array.isArray(value)) return ''
 
-    return value
-        .slice(0, 4)
-        .map((item) => {
-            const name = String(item?.name ?? '').trim()
-            const stack = takeCleanStrings(item?.stack, 8)
-            const bullets = takeCleanStrings(item?.bullets, 3)
+  return value
+    .slice(0, 4)
+    .map((item) => {
+      const name = String(item?.name ?? '').trim()
+      const stack = takeCleanStrings(item?.stack, 8)
+      const bullets = takeCleanStrings(item?.bullets, 3)
 
-            return `
+      return `
               <article>
                 <h3>${escapeHtml(name)}</h3>
                 ${stack.length ? `<p><strong>Stack:</strong> ${escapeHtml(stack.join(' · '))}</p>` : ''}
                 ${bullets.length ? `<ul>${renderList(bullets, 3)}</ul>` : ''}
               </article>
             `
-        })
-        .join('')
+    })
+    .join('')
 }
 
 function renderEducation(value: unknown) {
-    if (!Array.isArray(value)) return ''
+  if (!Array.isArray(value)) return ''
 
-    return value
-        .slice(0, 2)
-        .map((item) => {
-            const degree = String(item?.degree ?? '').trim()
-            const institution = String(item?.institution ?? '').trim()
-            const period = String(item?.period ?? '').trim()
-            const status = String(item?.status ?? '').trim()
+  return value
+    .slice(0, 2)
+    .map((item) => {
+      const degree = String(item?.degree ?? '').trim()
+      const institution = String(item?.institution ?? '').trim()
+      const period = String(item?.period ?? '').trim()
+      const status = String(item?.status ?? '').trim()
 
-            return `
+      return `
               <article>
                 <p>
                   <strong>${escapeHtml(degree)}</strong>
@@ -264,39 +273,33 @@ function renderEducation(value: unknown) {
                 </p>
               </article>
             `
-        })
-        .join('')
+    })
+    .join('')
 }
 
 function renderLanguages(value: unknown) {
-    if (!Array.isArray(value)) return ''
+  if (!Array.isArray(value)) return ''
 
-    const items = value
-        .slice(0, 2)
-        .map((item) => {
-            const name = String(item?.name ?? '').trim()
-            const level = String(item?.level ?? '').trim()
-            return `${name}: ${level}`
-        })
-        .filter(Boolean)
+  const items = value
+    .slice(0, 2)
+    .map((item) => {
+      const name = String(item?.name ?? '').trim()
+      const level = String(item?.level ?? '').trim()
+      return `${name}: ${level}`
+    })
+    .filter(Boolean)
 
-    return `<p>${escapeHtml(items.join(' · '))}</p>`
+  return `<p>${escapeHtml(items.join(' · '))}</p>`
 }
 
 function buildHtml(content: AdaptedCvResult['contentJson']) {
-    const skillsText = content.skills
-        .slice(0, 18)
-        .map((skill) => skill.trim())
-        .filter(Boolean)
-        .join(' · ')
+  const skillsText = content.skills
+    .slice(0, 18)
+    .map((skill) => skill.trim())
+    .filter(Boolean)
+    .join(' · ')
 
-    const atsKeywordsText = content.ats_keywords
-        .slice(0, 14)
-        .map((keyword) => keyword.trim())
-        .filter(Boolean)
-        .join(' · ')
-
-    return `<!doctype html>
+  return `<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8" />
@@ -412,86 +415,81 @@ function buildHtml(content: AdaptedCvResult['contentJson']) {
     <h2>Idiomas</h2>
     ${renderLanguages(content.languages)}
   </section>
-
-  <section>
-    <h2>Keywords ATS priorizadas</h2>
-    <p class="compact-line">${escapeHtml(atsKeywordsText)}</p>
-  </section>
 </body>
 </html>`
 }
 
 export async function generateAdaptedCv(
-    params: GenerateAdaptedCvParams
+  params: GenerateAdaptedCvParams
 ): Promise<AdaptedCvResult> {
-    const provider = process.env.AI_PROVIDER?.trim() || 'gemini'
+  const provider = process.env.AI_PROVIDER?.trim() || 'gemini'
 
-    if (provider !== 'gemini') {
-        throw new Error(`Unsupported AI_PROVIDER: ${provider}`)
+  if (provider !== 'gemini') {
+    throw new Error(`Unsupported AI_PROVIDER: ${provider}`)
+  }
+
+  const apiKey = getRequiredEnv('GEMINI_API_KEY')
+  const model = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash'
+  const prompt = buildPrompt(params)
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      cache: 'no-store',
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json',
+        },
+      }),
     }
+  )
 
-    const apiKey = getRequiredEnv('GEMINI_API_KEY')
-    const model = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash'
-    const prompt = buildPrompt(params)
+  const data = (await response.json()) as GeminiResponse
 
-    const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            cache: 'no-store',
-            body: JSON.stringify({
-                contents: [
-                    {
-                        role: 'user',
-                        parts: [{ text: prompt }],
-                    },
-                ],
-                generationConfig: {
-                    temperature: 0,
-                    responseMimeType: 'application/json',
-                },
-            }),
-        }
-    )
+  if (!response.ok || data.error) {
+    throw new Error(data.error?.message || `Gemini request failed with ${response.status}`)
+  }
 
-    const data = (await response.json()) as GeminiResponse
+  const text = extractGeminiText(data)
 
-    if (!response.ok || data.error) {
-        throw new Error(data.error?.message || `Gemini request failed with ${response.status}`)
-    }
+  if (!text) {
+    throw new Error('Gemini returned empty response')
+  }
 
-    const text = extractGeminiText(data)
+  const parsed = JSON.parse(cleanJsonText(text)) as Partial<AdaptedCvResult['contentJson']>
 
-    if (!text) {
-        throw new Error('Gemini returned empty response')
-    }
+  const contentJson: AdaptedCvResult['contentJson'] = {
+    candidate_name: 'Martin Vergara',
+    headline:
+      parsed.headline ||
+      params.cvProfile?.headline ||
+      'Desarrollador Full Stack Jr. | Foco Backend',
+    target_role: params.job.title,
+    target_company: params.job.company,
+    summary: parsed.summary || params.cvProfile?.summary || '',
+    skills: asStringArray(parsed.skills, params.cvProfile?.skills ?? []),
+    experience: parsed.experience ?? params.cvProfile?.experience ?? {},
+    projects: parsed.projects ?? params.cvProfile?.projects ?? {},
+    education: parsed.education ?? params.cvProfile?.education ?? {},
+    languages: parsed.languages ?? params.cvProfile?.languages ?? {},
+    ats_keywords: asStringArray(parsed.ats_keywords, params.applicationPack?.ats_keywords ?? []),
+    missing_keywords: asStringArray(parsed.missing_keywords, params.applicationPack?.missing_keywords ?? []),
+  }
 
-    const parsed = JSON.parse(cleanJsonText(text)) as Partial<AdaptedCvResult['contentJson']>
-
-    const contentJson: AdaptedCvResult['contentJson'] = {
-        candidate_name: 'Martin Vergara',
-        headline:
-            parsed.headline ||
-            params.cvProfile?.headline ||
-            'Desarrollador Full Stack Jr. | Foco Backend',
-        target_role: params.job.title,
-        target_company: params.job.company,
-        summary: parsed.summary || params.cvProfile?.summary || '',
-        skills: asStringArray(parsed.skills, params.cvProfile?.skills ?? []),
-        experience: parsed.experience ?? params.cvProfile?.experience ?? {},
-        projects: parsed.projects ?? params.cvProfile?.projects ?? {},
-        education: parsed.education ?? params.cvProfile?.education ?? {},
-        languages: parsed.languages ?? params.cvProfile?.languages ?? {},
-        ats_keywords: asStringArray(parsed.ats_keywords, params.applicationPack?.ats_keywords ?? []),
-        missing_keywords: asStringArray(parsed.missing_keywords, params.applicationPack?.missing_keywords ?? []),
-    }
-
-    return {
-        title: `CV Martin Vergara - ${params.job.title}`,
-        html: buildHtml(contentJson),
-        contentJson,
-    }
+  return {
+    title: `CV Martin Vergara - ${params.job.title}`,
+    html: buildHtml(contentJson),
+    contentJson,
+  }
 }
