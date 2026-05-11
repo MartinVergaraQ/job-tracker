@@ -104,10 +104,106 @@ type MatchCommand = {
     | 'descartar'
     | 'aplicado'
     | 'cvdoc'
+    | 'link'
     itemNumber: number
 }
 
 type PackCommandMode = 'pack' | 'mensaje' | 'cv' | 'carta'
+
+type ApplicationRow = {
+    id: string
+    status: string
+    applied_at: string | null
+    updated_at: string
+    notes: string | null
+    jobs: {
+        title: string
+        company: string
+        url: string
+    } | null
+    search_profiles: {
+        name: string
+        slug: string
+    } | null
+}
+
+async function handleApplicationsCommand(params: {
+    recipient: string
+}) {
+    const supabase = createAdminClient()
+
+    const { data, error } = await supabase
+        .from('job_applications')
+        .select(`
+            id,
+            status,
+            applied_at,
+            updated_at,
+            notes,
+            jobs (
+                title,
+                company,
+                url
+            ),
+            search_profiles (
+                name,
+                slug
+            )
+        `)
+        .eq('profile_id', '7fab5bd9-502d-412d-b37e-bace8ed4487f')
+        .order('updated_at', { ascending: false })
+        .limit(10)
+
+    if (error) {
+        throw new Error(error.message)
+    }
+
+    const rows = (data ?? []) as unknown as ApplicationRow[]
+
+    if (rows.length === 0) {
+        return [
+            'Todavía no tienes postulaciones registradas.',
+            '',
+            'Flujo recomendado:',
+            'matches',
+            'preparar 1',
+            'cvdoc 1',
+            'confirmar 1',
+            'link 1',
+            'aplicado 1',
+        ].join('\n')
+    }
+
+    const statusLabel: Record<string, string> = {
+        saved: '💾 Guardada',
+        ready: '📄 CV listo',
+        approved: '🟡 Aprobada',
+        applied: '✅ Postulada',
+        interview: '🎙️ Entrevista',
+        rejected: '❌ Rechazada',
+        offer: '🎉 Oferta',
+    }
+
+    return [
+        '📌 Tus últimas postulaciones',
+        '',
+        ...rows.flatMap((row, index) => {
+            const job = row.jobs
+            const label = statusLabel[row.status] ?? row.status
+
+            return [
+                `${index + 1}. ${label}`,
+                `   ${job?.title ?? 'Sin cargo'} - ${job?.company ?? 'Empresa no indicada'}`,
+                row.applied_at ? `   Postulado: ${new Date(row.applied_at).toLocaleDateString('es-CL')}` : null,
+                job?.url ? `   Link: ${job.url}` : null,
+                '',
+            ].filter(Boolean)
+        }),
+        'Comandos útiles:',
+        'matches',
+        'run',
+    ].join('\n')
+}
 
 function isPackCommandMode(action: MatchCommand['action']): action is PackCommandMode {
     return (
@@ -184,8 +280,7 @@ type CvProfileRow = {
 }
 
 function parseMatchCommand(command: string): MatchCommand | null {
-    const match = command.match(/^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado|cvdoc)\s+(\d+)$/)
-
+    const match = command.match(/^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado|cvdoc|link)\s+(\d+)$/)
     if (!match) return null
 
     const action = match[1] as MatchCommand['action']
@@ -249,6 +344,60 @@ function buildMatchDetailMessage(row: SessionItemRow) {
         `preparar ${row.item_number}`,
         `descartar ${row.item_number}`,
         `aplicado ${row.item_number}`,
+        `link ${row.item_number}`,
+    ]
+        .filter(Boolean)
+        .join('\n')
+}
+
+async function handleLinkCommand(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        if (result.reason === 'no_active_session') {
+            return [
+                'No tienes una sesión activa de matches.',
+                '',
+                'Primero responde:',
+                'matches',
+                'o:',
+                'run',
+            ].join('\n')
+        }
+
+        return `No encontré el match ${params.itemNumber}.`
+    }
+
+    const item = result.item
+    const job = item.jobs
+    const profile = item.search_profiles
+
+    if (!job) {
+        return '❌ No pude cargar el link de esta oferta.'
+    }
+
+    return [
+        `🔗 Link Match ${params.itemNumber}`,
+        '',
+        `Cargo: ${job.title}`,
+        `Empresa: ${job.company}`,
+        profile ? `Perfil: ${profile.name}` : null,
+        '',
+        'Postula aquí:',
+        job.url,
+        '',
+        'Antes de postular revisa:',
+        `pack ${params.itemNumber}`,
+        `cvdoc ${params.itemNumber}`,
+        '',
+        'Cuando ya postules:',
+        `aplicado ${params.itemNumber}`,
     ]
         .filter(Boolean)
         .join('\n')
@@ -1478,6 +1627,15 @@ async function handleConfirmCommand(params: {
             }
         )
 
+    const { data: cvDocument } = await supabase
+        .from('cv_documents')
+        .select('id, public_url, format')
+        .eq('job_id', item.job_id)
+        .eq('profile_id', item.profile_id)
+        .eq('format', 'pdf')
+        .not('public_url', 'is', null)
+        .maybeSingle()
+
     if (applicationError) {
         throw new Error(applicationError.message)
     }
@@ -1503,11 +1661,11 @@ async function handleConfirmCommand(params: {
         'Estado guardado:',
         'approved',
         '',
-        'Siguiente paso recomendado:',
-        `cvdoc ${params.itemNumber} → generar CV ATS en PDF`,
+        cvDocument?.public_url
+            ? `CV listo:\n${cvDocument.public_url}`
+            : `Siguiente paso recomendado:\ncvdoc ${params.itemNumber} → generar CV ATS en PDF`,
         '',
-        'Después postula aquí:',
-        job?.url ? job.url : 'Abre el link de la oferta desde match.',
+        job?.url ? `Postula aquí:\n${job.url}` : 'Abre el link de la oferta desde match.',
         '',
         `Cuando postules, responde: aplicado ${params.itemNumber}`,
     ]
@@ -1586,6 +1744,8 @@ function buildHelpMessage() {
         'confirmar 1 - aprobar pack antes de postular',
         'descartar 1 - descartar match',
         'aplicado 1 - marcar como postulado',
+        'link 1 - ver link directo de postulación',
+        'postulaciones - ver postulaciones guardadas/aprobadas/postuladas',
         'ayuda - ver comandos',
         '',
         'Ejemplo:',
@@ -2006,6 +2166,57 @@ export async function POST(request: NextRequest): Promise<Response> {
                         to: incoming.from,
                         body: [
                             '❌ No pude generar el CV ATS en PDF.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
+            })
+
+            continue
+        }
+        if (matchCommand?.action === 'link') {
+            after(async () => {
+                try {
+                    const message = await handleLinkCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude cargar el link.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
+            })
+
+            continue
+        }
+        if (command === 'postulaciones' || command === 'aplicaciones' || command === 'estado') {
+            after(async () => {
+                try {
+                    const message = await handleApplicationsCommand({
+                        recipient: incoming.from,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude cargar tus postulaciones.',
                             '',
                             error instanceof Error ? error.message : 'Error desconocido',
                         ].join('\n'),
