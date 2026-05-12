@@ -1,109 +1,146 @@
-<a href="https://demo-nextjs-with-supabase.vercel.app/">
-  <img alt="Next.js and Supabase Starter Kit - the fastest way to build apps with Next.js and Supabase" src="https://demo-nextjs-with-supabase.vercel.app/opengraph-image.png">
-  <h1 align="center">Next.js and Supabase Starter Kit</h1>
-</a>
+# Job Tracker / Job Application Copilot
 
-<p align="center">
- The fastest way to build apps with Next.js and Supabase
-</p>
+Sistema personal para centralizar la búsqueda laboral, detectar oportunidades relevantes y acelerar el proceso de postulación con apoyo de automatización, scoring y generación de CV ATS.
 
-<p align="center">
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#demo"><strong>Demo</strong></a> ·
-  <a href="#deploy-to-vercel"><strong>Deploy to Vercel</strong></a> ·
-  <a href="#clone-and-run-locally"><strong>Clone and run locally</strong></a> ·
-  <a href="#feedback-and-issues"><strong>Feedback and issues</strong></a>
-  <a href="#more-supabase-examples"><strong>More Examples</strong></a>
-</p>
-<br/>
+## 🚀 Qué hace
 
-## Features
+Este proyecto me ayuda a:
 
-- Works across the entire [Next.js](https://nextjs.org) stack
-  - App Router
-  - Pages Router
-  - Proxy
-  - Client
-  - Server
-  - It just works!
-- supabase-ssr. A package to configure Supabase Auth to use cookies
-- Password-based authentication block installed via the [Supabase UI Library](https://supabase.com/ui/docs/nextjs/password-based-auth)
-- Styling with [Tailwind CSS](https://tailwindcss.com)
-- Components with [shadcn/ui](https://ui.shadcn.com/)
-- Optional deployment with [Supabase Vercel Integration and Vercel deploy](#deploy-your-own)
-  - Environment variables automatically assigned to Vercel project
+- recolectar ofertas laborales desde múltiples fuentes
+- normalizar y procesar empleos en un solo flujo
+- generar matches según perfil, stack, seniority y modalidad
+- preparar packs de postulación
+- generar CV ATS en PDF
+- operar el flujo desde WhatsApp
+- mantener un CV base activo desde un panel admin
 
-## Demo
+## ✨ Features principales
 
-You can view a fully working demo at [demo-nextjs-with-supabase.vercel.app](https://demo-nextjs-with-supabase.vercel.app/).
+- **Pipeline de empleos**
+  - collect
+  - dedupe
+  - enrich
+  - rescore
+  - notify
 
-## Deploy to Vercel
+- **Fuentes integradas**
+  - Get on Board
+  - Chiletrabajos
+  - LinkedIn email alerts
+  - Computrabajo email alerts
+  - Laborum
 
-Vercel deployment will guide you through creating a Supabase account and project.
+- **Matching y scoring**
+  - keywords
+  - seniority
+  - modalidad
+  - stack principal
+  - filtros por perfil
 
-After installation of the Supabase integration, all relevant environment variables will be assigned to the project so the deployment is fully functioning.
+- **Flujo de postulación**
+  - evaluación rápida
+  - resumen de calce
+  - keywords ATS
+  - mensaje para recruiter
+  - carta de presentación
+  - checklist
+  - generación de CV ATS PDF
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&project-name=nextjs-with-supabase&repository-name=nextjs-with-supabase&demo-title=nextjs-with-supabase&demo-description=This+starter+configures+Supabase+Auth+to+use+cookies%2C+making+the+user%27s+session+available+throughout+the+entire+Next.js+app+-+Client+Components%2C+Server+Components%2C+Route+Handlers%2C+Server+Actions+and+Middleware.&demo-url=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2F&external-id=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&demo-image=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2Fopengraph-image.png)
+- **Operación por WhatsApp**
+  - correr pipeline
+  - ver matches
+  - revisar detalle
+  - preparar postulación
+  - generar CV
+  - aprobar pack
+  - marcar postulado
+  - ver link directo
 
-The above will also clone the Starter kit to your GitHub, you can clone that locally and develop locally.
+- **Admin panel**
+  - dashboard del pipeline
+  - corridas
+  - top matches
+  - conversión
+  - importación de CV base
+  - activación del CV base actual
 
-If you wish to just develop locally and not deploy to Vercel, [follow the steps below](#clone-and-run-locally).
+## 🧠 Problema que resuelve
 
-## Clone and run locally
+Buscar trabajo de forma manual suele ser lento y repetitivo:
 
-1. You'll first need a Supabase project which can be made [via the Supabase dashboard](https://database.new)
+- revisar múltiples fuentes
+- copiar links
+- comparar ofertas
+- adaptar CV
+- ordenar postulaciones
+- hacer seguimiento
 
-2. Create a Next.js app using the Supabase Starter template npx command
+Este proyecto centraliza ese proceso y convierte una búsqueda dispersa en un flujo más ordenado y reutilizable.
 
-   ```bash
-   npx create-next-app --example with-supabase with-supabase-app
-   ```
+## 🛠 Stack
 
-   ```bash
-   yarn create next-app --example with-supabase with-supabase-app
-   ```
+- **Frontend / App:** Next.js, React, TypeScript
+- **Backend:** Node.js, API Routes / Server Actions
+- **Base de datos:** Supabase, PostgreSQL
+- **Deploy:** Vercel
+- **Mensajería:** WhatsApp Cloud API
+- **Automatización / IA:** generación de CV y contenido adaptado
+- **Scraping / ingestión:** HTML, browser automation, email alerts
 
-   ```bash
-   pnpm create next-app --example with-supabase with-supabase-app
-   ```
+## ⚙️ Flujo general
 
-3. Use `cd` to change into the app's directory
+```text
+Fuentes -> Collect -> Dedupe -> Enrich -> Rescore -> Notify
+                                      ↓
+                               Matches relevantes
+                                      ↓
+                        Pack de postulación + CV ATS PDF
+                                      ↓
+                              Seguimiento por WhatsApp
+📲 Comandos por WhatsApp
 
-   ```bash
-   cd with-supabase-app
-   ```
+Algunos comandos soportados:
 
-4. Rename `.env.example` to `.env.local` and update the following:
+run → correr pipeline completo
+matches → ver matches recientes
+match 1 → ver detalle
+preparar 1 → generar pack de postulación
+pack 1 → ver pack completo
+cv 1 → ver mejoras sugeridas al CV
+carta 1 → ver carta de presentación
+cvdoc 1 → generar CV ATS en PDF
+confirmar 1 → aprobar pack
+aplicado 1 → marcar como postulado
+postulaciones → ver seguimiento
+🧾 CV base administrable
 
-  ```env
-  NEXT_PUBLIC_SUPABASE_URL=[INSERT SUPABASE PROJECT URL]
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=[INSERT SUPABASE PROJECT API PUBLISHABLE OR ANON KEY]
-  ```
-  > [!NOTE]
-  > This example uses `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, which refers to Supabase's new **publishable** key format.
-  > Both legacy **anon** keys and new **publishable** keys can be used with this variable name during the transition period. Supabase's dashboard may show `NEXT_PUBLIC_SUPABASE_ANON_KEY`; its value can be used in this example.
-  > See the [full announcement](https://github.com/orgs/supabase/discussions/29260) for more information.
+El sistema incluye una vista admin para:
 
-  Both `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` can be found in [your Supabase project's API settings](https://supabase.com/dashboard/project/_?showConnect=true)
+pegar un CV completo
+parsearlo a una estructura interna
+guardarlo como borrador
+activar la versión que se usará como base en futuras postulaciones
 
-5. You can now run the Next.js local development server:
+Esto permite actualizar la base curricular sin tocar manualmente cada CV generado.
 
-   ```bash
-   npm run dev
-   ```
+📌 Estado actual
 
-   The starter kit should now be running on [localhost:3000](http://localhost:3000/).
+MVP funcional para uso personal.
 
-6. This template comes with the default shadcn/ui style initialized. If you instead want other ui.shadcn styles, delete `components.json` and [re-install shadcn/ui](https://ui.shadcn.com/docs/installation/next)
+Actualmente permite:
 
-> Check out [the docs for Local Development](https://supabase.com/docs/guides/getting-started/local-development) to also run Supabase locally.
+recolectar empleos
+generar matches
+preparar postulaciones
+generar CV ATS
+usar WhatsApp como interfaz operativa
+administrar un CV base activo
 
-## Feedback and issues
+🔒 Notas
 
-Please file feedback and issues over on the [Supabase GitHub org](https://github.com/supabase/supabase/issues/new/choose).
+Este proyecto fue construido para uso personal y aprendizaje aplicado.
+Las credenciales, tokens, variables sensibles y configuraciones privadas no están incluidas en el repositorio.
 
-## More Supabase examples
-
-- [Next.js Subscription Payments Starter](https://github.com/vercel/nextjs-subscription-payments)
-- [Cookie-based Auth and the Next.js 13 App Router (free course)](https://youtube.com/playlist?list=PL5S4mPUpp4OtMhpnp93EFSo42iQ40XjbF)
-- [Supabase Auth and the Next.js App Router](https://github.com/supabase/supabase/tree/master/examples/auth/nextjs)
+📬 Contacto
+LinkedIn: Martín Vergara
+GitHub: MartinVergaraQ
