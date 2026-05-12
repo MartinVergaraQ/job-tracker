@@ -142,10 +142,11 @@ function formatDateCL(value: string | null | undefined) {
 function buildApplicationLines(rows: ApplicationRow[]) {
     return rows.flatMap((row, index) => {
         const job = row.jobs
+        const isApplied = row.status === 'applied'
 
         return [
             `${index + 1}. ${job?.title ?? 'Sin cargo'} - ${job?.company ?? 'Empresa no indicada'}`,
-            row.applied_at ? `   Postulado: ${formatDateCL(row.applied_at)}` : null,
+            isApplied && row.applied_at ? `   Postulado: ${formatDateCL(row.applied_at)}` : null,
             `   Actualizado: ${formatDateCL(row.updated_at)}`,
             job?.url ? `   Link: ${job.url}` : null,
         ].filter(Boolean) as string[]
@@ -654,6 +655,7 @@ async function handleCvDocCommand(params: {
                     job_id: item.job_id,
                     profile_id: item.profile_id,
                     status: 'ready',
+                    applied_at: null,
                     cv_document_id: generateBody.document.id ?? null,
                     cv_public_url: generateBody.document.public_url,
                     notes: 'Se reutilizó CV PDF existente por alta demanda de la IA.',
@@ -1584,6 +1586,7 @@ async function handlePrepareCommand(params: {
                 job_id: item.job_id,
                 profile_id: item.profile_id,
                 status: 'saved',
+                applied_at: null,
                 cv_variant: 'backend_fullstack_jr',
                 notes: 'Pack de postulación generado desde WhatsApp.',
                 source_notes: 'whatsapp_command:preparar',
@@ -2012,6 +2015,7 @@ async function handleConfirmCommand(params: {
                 job_id: item.job_id,
                 profile_id: item.profile_id,
                 status: 'approved',
+                applied_at: null,
                 cv_variant: packResult.pack.recommended_cv_variant,
                 notes: 'Pack aprobado desde WhatsApp. Listo para postular.',
                 source_notes: 'whatsapp_command:confirmar',
