@@ -111,6 +111,7 @@ type MatchCommand = {
 
 type PackCommandMode = 'pack' | 'mensaje' | 'cv' | 'carta'
 
+
 type ApplicationRow = {
     id: string
     status: string
@@ -198,13 +199,13 @@ async function handleApplicationsCommand(params: {
         ].join('\n')
     }
 
-    const appliedRows = rows.filter((row) => row.status === 'applied')
-    const approvedRows = rows.filter((row) => row.status === 'approved')
-    const readyRows = rows.filter((row) => row.status === 'ready')
-    const savedRows = rows.filter((row) => row.status === 'saved')
-    const interviewRows = rows.filter((row) => row.status === 'interview')
-    const offerRows = rows.filter((row) => row.status === 'offer')
-    const rejectedRows = rows.filter((row) => row.status === 'rejected')
+    const appliedRows = rows.filter((row) => row.status === 'applied').slice(0, 5)
+    const approvedRows = rows.filter((row) => row.status === 'approved').slice(0, 5)
+    const readyRows = rows.filter((row) => row.status === 'ready').slice(0, 5)
+    const savedRows = rows.filter((row) => row.status === 'saved').slice(0, 5)
+    const interviewRows = rows.filter((row) => row.status === 'interview').slice(0, 5)
+    const offerRows = rows.filter((row) => row.status === 'offer').slice(0, 5)
+    const rejectedRows = rows.filter((row) => row.status === 'rejected').slice(0, 5)
 
     const sections: string[] = ['📌 Tus postulaciones', '']
 
@@ -250,6 +251,10 @@ async function handleApplicationsCommand(params: {
         sections.push('')
     }
 
+    sections.push(
+        `Resumen: Postuladas ${appliedRows.length} | Aprobadas ${approvedRows.length} | CV listo ${readyRows.length} | Guardadas ${savedRows.length} | Entrevistas ${interviewRows.length} | Ofertas ${offerRows.length} | Rechazadas ${rejectedRows.length}`
+    )
+    sections.push('')
     sections.push('Comandos útiles:')
     sections.push('matches')
     sections.push('run')
