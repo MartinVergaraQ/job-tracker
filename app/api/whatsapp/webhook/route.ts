@@ -558,13 +558,58 @@ async function handleCvDocCommand(params: {
 
     const generateBody = await generateResponse.json().catch(() => null) as {
         ok?: boolean
+        source?: 'generated' | 'fallback_existing_pdf'
+        warning?: string
+        message?: string
         document?: {
-            id: string
-            title: string
-            format: string
+            id?: string
+            title?: string
+            format?: string
+            public_url?: string
         }
         error?: string
+        errorCode?: string
     } | null
+
+    if (
+        generateBody?.ok &&
+        generateBody.source === 'fallback_existing_pdf' &&
+        generateBody.document?.public_url
+    ) {
+        const supabase = createAdminClient()
+
+        await supabase
+            .from('job_applications')
+            .upsert(
+                {
+                    job_id: item.job_id,
+                    profile_id: item.profile_id,
+                    status: 'ready',
+                    cv_document_id: generateBody.document.id ?? null,
+                    cv_public_url: generateBody.document.public_url,
+                    notes: 'Se reutilizó CV PDF existente por alta demanda de la IA.',
+                    source_notes: 'whatsapp_command:cvdoc:fallback_existing_pdf',
+                    updated_at: new Date().toISOString(),
+                },
+                {
+                    onConflict: 'job_id,profile_id',
+                }
+            )
+
+        return [
+            '⚠️ La IA está con alta demanda en este momento.',
+            'Te dejo el último CV generado para esta oferta:',
+            '',
+            generateBody.document.public_url,
+            '',
+            'Estado guardado:',
+            'ready',
+            '',
+            'Siguiente paso:',
+            `confirmar ${params.itemNumber} → aprobar pack`,
+            `aplicado ${params.itemNumber} → marcar como postulado cuando ya postules`,
+        ].join('\n')
+    }
 
     if (!generateResponse.ok || !generateBody?.ok || !generateBody.document?.id) {
         return [
