@@ -139,7 +139,7 @@ function normalizeHeadline(value: string | null | undefined) {
 function normalizeSummary(value: string | null | undefined) {
   const text = (value ?? '').trim()
   if (!text) {
-    return 'Desarrollador Full Stack Junior con experiencia en la construcción de productos web y sistemas orientados a negocio. Mi foco principal está en backend con Node.js, SQL y Supabase, junto con experiencia práctica en APIs REST, paneles administrativos y automatizaciones. Cuento además con base sólida en frontend con React, Next.js, Angular y TypeScript, desarrollando soluciones completas para procesos reales.'
+    return 'Desarrollador Full Stack Junior con experiencia en la construcción de productos web y sistemas orientados a negocio. Mi foco principal está en backend con Node.js, SQL y Supabase, junto con experiencia práctica en APIs REST, paneles administrativos y automatizaciones. Cuento además con base sólida en frontend utilizando React, Next.js, Angular y TypeScript para desarrollar soluciones completas.'
   }
 
   return text
@@ -195,13 +195,23 @@ function normalizeExperience(value: unknown) {
     ) {
       role = 'Desarrollador Full Stack'
     }
+    const normalizedBullets = bullets.map((bullet) => {
+      if (
+        company.toLowerCase().includes('als inspection chile') &&
+        bullet.toLowerCase().includes('calendario unificado')
+      ) {
+        return 'Desarrollé un calendario unificado con eventos y vencimientos, filtros y visualización por estado para distintos perfiles de usuario.'
+      }
+
+      return bullet
+    })
 
     return {
       role,
       company,
       period,
       stack,
-      bullets,
+      bullets: normalizedBullets,
     }
   })
 }
@@ -234,6 +244,14 @@ function normalizeProjects(value: unknown) {
         'Implementé scoring por keywords, seniority, modalidad y stack tecnológico, reduciendo falsos positivos.',
         'Construí un flujo semi-automatizado para revisar ofertas, generar CV ATS en PDF y dar seguimiento a postulaciones por WhatsApp.',
       ]
+
+      if (loweredName.includes('barber')) {
+        bullets = [
+          'Desarrollé una plataforma multi-negocio para barberías, con arquitectura escalable y separación lógica de datos.',
+          'Implementé módulos de reservas, servicios y administración, con enfoque en comercialización por membresía.',
+          'Diseñé el producto con enfoque SaaS, arquitectura multi-negocio y escalabilidad para múltiples clientes.',
+        ]
+      }
     }
 
     return {
