@@ -8,6 +8,7 @@ import { getLinkedInEmailJobs } from '../linkedin-email.adapter'
 import { getComputrabajoEmailJobs } from '../computrabajo-email.adapter'
 import type { NormalizedJob, SearchProfile } from '../../types/job'
 import { getLaborumJobs } from '../laborum.adapter'
+import { getTrabajandoJobs } from '../get-trabajando-jobs'
 
 type SourceResult = {
     source_name: string
@@ -206,6 +207,11 @@ export async function collectJobs(): Promise<CollectJobsResult> {
             source_name: 'laborum',
             enabled: process.env.LABORUM_ENABLED === 'true',
             runner: getLaborumJobs,
+        },
+        {
+            source_name: 'trabajando',
+            enabled: process.env.TRABAJANDO_ENABLED === 'true',
+            runner: getTrabajandoJobs,
         },
     ]
 
