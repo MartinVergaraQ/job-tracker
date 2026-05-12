@@ -4,10 +4,7 @@ import { chromium } from 'playwright'
 import { parseLaborumHtml, type ParsedLaborumJob } from './parse-laborum-html'
 
 function getBaseUrl() {
-    return (
-        process.env.LABORUM_JOBS_URL ??
-        'https://www.laborum.cl/empleos.html'
-    )
+    return process.env.LABORUM_JOBS_URL ?? 'https://www.laborum.cl/empleos.html'
 }
 
 function getMaxPages() {
@@ -71,7 +68,13 @@ export async function scrapeLaborumJobs(): Promise<ParsedLaborumJob[]> {
     const maxPages = getMaxPages()
 
     try {
-        const page = await browser.newPage()
+        const page = await browser.newPage({
+            userAgent:
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            viewport: { width: 1366, height: 900 },
+        })
+
+        let emptyPagesInRow = 0
 
         for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
             const url = buildPageUrl(baseUrl, pageNumber)
@@ -85,7 +88,7 @@ export async function scrapeLaborumJobs(): Promise<ParsedLaborumJob[]> {
                 timeout: 15_000,
             }).catch(() => null)
 
-            await page.waitForTimeout(4000)
+            await page.waitForTimeout(3500)
 
             await page
                 .waitForSelector('a[href*="/empleos/"]', {
@@ -96,15 +99,20 @@ export async function scrapeLaborumJobs(): Promise<ParsedLaborumJob[]> {
             const html = await page.content()
             const pageUrl = page.url()
             const pageTitle = await page.title()
-            const possibleJobLinks = await page
-                .locator('a[href*="/empleos/"]')
-                .count()
+            const possibleJobLinks = await page.locator('a[href*="/empleos/"]').count()
 
+            const loweredTitle = pageTitle.toLowerCase()
             const blockedByCloudflare =
-                pageTitle.toLowerCase().includes('attention required') ||
-                pageTitle.toLowerCase().includes('cloudflare')
+                loweredTitle.includes('attention required') ||
+                loweredTitle.includes('cloudflare')
 
             if (blockedByCloudflare) {
+                console.warn('[laborum] blocked by cloudflare', {
+                    pageNumber,
+                    pageUrl,
+                    pageTitle,
+                })
+
                 const screenshotBuffer = await page.screenshot({ fullPage: true })
 
                 await saveDebugArtifacts({
@@ -129,6 +137,8 @@ export async function scrapeLaborumJobs(): Promise<ParsedLaborumJob[]> {
             })
 
             if (!pageJobs.length) {
+                emptyPagesInRow += 1
+
                 const screenshotBuffer = await page.screenshot({ fullPage: true })
                 await saveDebugArtifacts({
                     html,
@@ -137,9 +147,15 @@ export async function scrapeLaborumJobs(): Promise<ParsedLaborumJob[]> {
                     screenshotBuffer,
                     label: `zero-results-page-${pageNumber}`,
                 })
-                break
+
+                if (emptyPagesInRow >= 2) {
+                    break
+                }
+
+                continue
             }
 
+            emptyPagesInRow = 0
             allJobs.push(...pageJobs)
         }
 

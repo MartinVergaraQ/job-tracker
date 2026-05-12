@@ -7,6 +7,7 @@ import { getDuolaboralJobs } from '../duolaboral.adapter'
 import { getLinkedInEmailJobs } from '../linkedin-email.adapter'
 import { getComputrabajoEmailJobs } from '../computrabajo-email.adapter'
 import type { NormalizedJob, SearchProfile } from '../../types/job'
+import { getLaborumJobs } from '../laborum.adapter'
 
 type SourceResult = {
     source_name: string
@@ -200,6 +201,11 @@ export async function collectJobs(): Promise<CollectJobsResult> {
             source_name: 'computrabajo_email_alerts',
             enabled: envEnabled('COMPUTRABAJO_EMAIL_ALERTS_ENABLED', true),
             runner: getComputrabajoEmailJobs,
+        },
+        {
+            source_name: 'laborum',
+            enabled: process.env.LABORUM_ENABLED === 'true',
+            runner: getLaborumJobs,
         },
     ]
 

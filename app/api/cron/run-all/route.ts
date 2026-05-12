@@ -10,10 +10,7 @@ type InternalCallResult = {
 }
 
 function getAllowedSecrets() {
-    return [
-        process.env.CRON_SECRET,
-        process.env.INTERNAL_API_SECRET,
-    ]
+    return [process.env.CRON_SECRET, process.env.INTERNAL_API_SECRET]
         .map((value) => value?.trim())
         .filter(Boolean) as string[]
 }
@@ -128,6 +125,7 @@ async function handleRunAll(request: NextRequest): Promise<Response> {
                 duration_ms: Date.now() - startedAt,
                 base_url: baseUrl,
                 collect,
+                dedupe: null,
                 enrich: null,
                 rescore: null,
                 notify: null,
@@ -135,6 +133,11 @@ async function handleRunAll(request: NextRequest): Promise<Response> {
             { status: 500 }
         )
     }
+
+    const dedupe = await callInternalEndpoint({
+        baseUrl,
+        path: '/api/jobs/dedupe',
+    })
 
     const enrich = await callInternalEndpoint({
         baseUrl,
@@ -151,7 +154,7 @@ async function handleRunAll(request: NextRequest): Promise<Response> {
         path: '/api/notifications/process',
     })
 
-    const ok = collect.ok && enrich.ok && rescore.ok && notify.ok
+    const ok = collect.ok && dedupe.ok && enrich.ok && rescore.ok && notify.ok
 
     return NextResponse.json(
         {
@@ -159,10 +162,12 @@ async function handleRunAll(request: NextRequest): Promise<Response> {
             duration_ms: Date.now() - startedAt,
             base_url: baseUrl,
             collect,
+            dedupe: dedupe.body,
             enrich: enrich.body,
             rescore: rescore.body,
             notify: notify.body,
             internal_statuses: {
+                dedupe: dedupe.status,
                 enrich: enrich.status,
                 rescore: rescore.status,
                 notify: notify.status,
