@@ -1222,11 +1222,31 @@ function buildFitSummary(item: SessionItemRow) {
     }
 
     const reasons = normalizeReasons(match.reasons)
+    const text = normalizeText(
+        [
+            job.title,
+            job.description ?? '',
+            ...(job.tech_tags ?? []),
+        ].join(' ')
+    )
+
+    const hasOffStack =
+        text.includes('java') ||
+        text.includes('spring') ||
+        text.includes('.net') ||
+        text.includes('c#') ||
+        text.includes('go') ||
+        text.includes('aws')
+
+    const opening = hasOffStack
+        ? `Buen calce para ${job.title}, pero con algunas tecnologías fuera del foco principal actual.`
+        : `Buen calce para ${job.title}, especialmente por alineación con stack y seniority.`
 
     return [
-        `La oferta "${job.title}" en ${job.company} calza con el perfil "${profile.name}" por su orientación técnica y tecnologías detectadas.`,
+        opening,
         '',
-        `Score: ${Math.round(match.score)}.`,
+        `Perfil evaluado: ${profile.name}`,
+        `Score: ${Math.round(match.score)}`,
         '',
         'Señales principales:',
         ...reasons.slice(0, 5).map((reason) => `- ${reason}`),
@@ -1243,63 +1263,46 @@ function buildCvImprovements(item: SessionItemRow, cvProfile: CvProfileRow | nul
         (tag) => !normalizedCvSkills.includes(tag.toLowerCase())
     )
 
-    const improvements = [
-        'Ajustar el resumen profesional para que mencione el cargo y tecnologías principales de la oferta.',
-        'Agregar 2 o 3 logros concretos relacionados con desarrollo web, APIs, backend o frontend.',
-        'Ordenar el stack técnico poniendo primero las tecnologías que aparecen en la oferta.',
-    ]
+    const improvements: string[] = []
 
-    if (cvProfile?.headline) {
-        improvements.push(`Usar como base de titular profesional: "${cvProfile.headline}".`)
-    }
-
-    if (jobTags.some((tag) => ['node', 'node.js', 'nestjs'].includes(tag.toLowerCase()))) {
-        improvements.push('Destacar experiencia creando APIs REST y servicios backend con Node.js/NestJS.')
-    }
+    improvements.push('Ajustar el resumen profesional al cargo y al stack principal de la oferta.')
+    improvements.push('Destacar primero Node.js, React, Next.js, TypeScript y SQL si son relevantes para el rol.')
+    improvements.push('Agregar logros concretos en experiencia o proyectos, no solo tareas realizadas.')
 
     if (jobTags.some((tag) => ['react', 'next.js', 'typescript'].includes(tag.toLowerCase()))) {
-        improvements.push('Resaltar experiencia con React/Next.js y TypeScript en proyectos web.')
+        improvements.push('Dar más visibilidad a proyectos donde usaste React, Next.js y TypeScript en contexto real.')
+    }
+
+    if (jobTags.some((tag) => ['node', 'node.js', 'api rest', 'sql', 'postgresql'].includes(tag.toLowerCase()))) {
+        improvements.push('Reforzar experiencia en backend, APIs REST, SQL y PostgreSQL en la sección de experiencia.')
     }
 
     if (jobTags.some((tag) => ['php', 'laravel'].includes(tag.toLowerCase()))) {
-        improvements.push('Mencionar experiencia con PHP/Laravel si aplica para esta oferta.')
-    }
-
-    if (jobTags.some((tag) => ['sql', 'postgresql', 'mysql'].includes(tag.toLowerCase()))) {
-        improvements.push('Agregar experiencia con SQL, consultas, modelado de datos o PostgreSQL/MySQL.')
+        improvements.push('Mencionar PHP/Laravel solo si realmente aporta a esta vacante específica.')
     }
 
     if (missingFromCv.length > 0) {
         improvements.push(
-            `Revisar si puedes respaldar estas keywords antes de agregarlas al CV: ${missingFromCv
-                .slice(0, 6)
-                .join(', ')}.`
+            `No agregues estas keywords al CV si no puedes defenderlas en entrevista: ${missingFromCv.slice(0, 6).join(', ')}.`
         )
     }
 
-    return improvements.slice(0, 9)
+    return improvements.slice(0, 8)
 }
 
 function buildRecruiterMessage(item: SessionItemRow, cvProfile: CvProfileRow | null) {
     const job = item.jobs
-
-    if (!job) {
-        return ''
-    }
+    if (!job) return ''
 
     const headline =
         cvProfile?.headline || 'Desarrollador Backend / Full Stack Junior'
 
-    const summary =
-        cvProfile?.summary ||
-        'Tengo experiencia desarrollando soluciones web, APIs y sistemas con tecnologías como Node.js, TypeScript, React/Next.js y bases de datos SQL.'
-
     return [
         `Hola, vi la oferta de ${job.title} en ${job.company} y me interesa postular.`,
         '',
-        `Soy ${headline}. ${summary}`,
+        `Soy ${headline}, con experiencia en desarrollo de productos web, backend y frontend usando principalmente Node.js, React, Next.js, TypeScript y SQL.`,
         '',
-        'Me gustaría conversar para contarles cómo mi perfil puede aportar al equipo.',
+        'Adjunto mi CV y quedo atento por si les interesa conversar.',
         '',
         'Saludos,',
         'Martin Vergara',
@@ -1389,6 +1392,7 @@ function buildPackReadyMessage(params: {
         `Perfil: ${profile.name}`,
         '',
         'Incluye:',
+        '- Evaluación rápida',
         '- Resumen de calce',
         '- Keywords ATS',
         '- Mejoras sugeridas al CV',
@@ -1396,11 +1400,8 @@ function buildPackReadyMessage(params: {
         '- Carta de presentación',
         '- Checklist de postulación',
         '',
-        'Siguiente paso:',
-        `pack ${item.item_number} → ver pack completo`,
-        `mensaje ${item.item_number} → ver mensaje recruiter`,
-        `cv ${item.item_number} → ver mejoras CV`,
-        `carta ${item.item_number} → ver carta`,
+        'Siguiente paso recomendado:',
+        `pack ${item.item_number} → revisar análisis completo`,
         `cvdoc ${item.item_number} → generar CV ATS en PDF`,
         `confirmar ${item.item_number} → aprobar pack`,
         '',
@@ -1671,6 +1672,112 @@ async function getApplicationPackForSessionItem(params: {
     }
 }
 
+function buildPackDecisionSummary(item: SessionItemRow) {
+    const job = item.jobs
+    const reasons = normalizeReasons(item.job_matches?.reasons)
+
+    if (!job) {
+        return {
+            verdict: 'Revisar',
+            strength: 'Sin datos suficientes',
+            risk: 'No se pudo analizar la oferta',
+        }
+    }
+
+    const text = normalizeText(
+        [
+            job.title,
+            job.description ?? '',
+            ...(job.tech_tags ?? []),
+        ].join(' ')
+    )
+
+    const hasOffStack =
+        text.includes('java') ||
+        text.includes('spring') ||
+        text.includes('.net') ||
+        text.includes('dotnet') ||
+        text.includes('c#') ||
+        text.includes('go') ||
+        text.includes('aws')
+
+    const hasSeniorSignal =
+        text.includes('senior') ||
+        text.includes('semi senior') ||
+        text.includes('semisenior') ||
+        text.includes('semi-senior') ||
+        text.includes('lead') ||
+        text.includes('architect') ||
+        text.includes('arquitecto')
+
+    const verdict = hasSeniorSignal
+        ? 'No prioridad'
+        : hasOffStack
+            ? 'Sí, con cuidado'
+            : 'Sí'
+
+    const strength =
+        reasons[0] ?? 'Buen calce con stack principal del perfil.'
+
+    const risk = hasSeniorSignal
+        ? 'La oferta parece pedir más seniority del ideal.'
+        : hasOffStack
+            ? 'La oferta menciona tecnologías fuera del foco principal actual.'
+            : 'No se detectan alertas fuertes.'
+
+    return {
+        verdict,
+        strength,
+        risk,
+    }
+}
+
+function buildPackAlerts(item: SessionItemRow) {
+    const job = item.jobs
+    if (!job) return []
+
+    const text = normalizeText(
+        [
+            job.title,
+            job.description ?? '',
+            ...(job.tech_tags ?? []),
+        ].join(' ')
+    )
+
+    const alerts: string[] = []
+
+    if (
+        text.includes('java') ||
+        text.includes('spring') ||
+        text.includes('.net') ||
+        text.includes('c#') ||
+        text.includes('aws') ||
+        text.includes('go')
+    ) {
+        alerts.push('Revisar si Java, .NET, Go o AWS son obligatorios o solo deseables.')
+    }
+
+    if (
+        text.includes('senior') ||
+        text.includes('semi senior') ||
+        text.includes('semisenior') ||
+        text.includes('semi-senior')
+    ) {
+        alerts.push('La oferta puede tener seniority más alta que tu foco actual.')
+    }
+
+    if (
+        text.includes('python') &&
+        !text.includes('node') &&
+        !text.includes('react') &&
+        !text.includes('typescript')
+    ) {
+        alerts.push('La vacante parece cargarse más a otro stack que al tuyo.')
+    }
+
+    return alerts.slice(0, 3)
+}
+
 function buildPackMessage(params: {
     item: SessionItemRow
     pack: ApplicationPackRow
@@ -1683,6 +1790,9 @@ function buildPackMessage(params: {
         return '❌ No pude cargar el detalle del pack.'
     }
 
+    const decision = buildPackDecisionSummary(item)
+    const alerts = buildPackAlerts(item)
+
     return limitText(
         [
             `📦 Pack Match ${item.item_number}`,
@@ -1692,6 +1802,14 @@ function buildPackMessage(params: {
             `Perfil: ${profile.name}`,
             `CV recomendado: ${pack.recommended_cv_variant}`,
             '',
+            'Evaluación rápida:',
+            `- Vale la pena postular: ${decision.verdict}`,
+            `- Punto fuerte: ${decision.strength}`,
+            `- Riesgo principal: ${decision.risk}`,
+            '',
+            alerts.length > 0 ? 'Alertas:' : null,
+            ...alerts.map((alert) => `- ${alert}`),
+            alerts.length > 0 ? '' : null,
             'Resumen de calce:',
             pack.fit_summary || 'Sin resumen generado.',
             '',
@@ -1712,7 +1830,7 @@ function buildPackMessage(params: {
             `carta ${item.item_number} → ver carta`,
             `cvdoc ${item.item_number} → generar CV ATS en PDF`,
             `aplicado ${item.item_number} → marcar postulado`,
-        ].join('\n'),
+        ].filter(Boolean).join('\n'),
         3500
     )
 }
