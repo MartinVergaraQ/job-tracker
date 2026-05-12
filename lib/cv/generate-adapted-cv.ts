@@ -109,6 +109,166 @@ function asStringArray(value: unknown, fallback: string[] = []) {
     .slice(0, 40)
 }
 
+function uniqueCaseInsensitive(values: string[]) {
+  const seen = new Set<string>()
+  const result: string[] = []
+
+  for (const raw of values) {
+    const value = raw.trim()
+    if (!value) continue
+
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+
+    seen.add(key)
+    result.push(value)
+  }
+
+  return result
+}
+
+function normalizeHeadline(value: string | null | undefined) {
+  const text = (value ?? '').trim()
+  if (!text) {
+    return 'Desarrollador Full Stack Junior | Node.js, React, TypeScript, SQL'
+  }
+
+  return text
+}
+
+function normalizeSummary(value: string | null | undefined) {
+  const text = (value ?? '').trim()
+  if (!text) {
+    return 'Desarrollador Full Stack Junior con experiencia en la construcción de productos web y sistemas orientados a negocio. Mi foco principal está en backend con Node.js, SQL y Supabase, junto con experiencia práctica en APIs REST, paneles administrativos y automatizaciones. Cuento además con base sólida en frontend con React, Next.js, Angular y TypeScript, desarrollando soluciones completas para procesos reales.'
+  }
+
+  return text
+}
+
+function normalizeSkills(value: string[]) {
+  const preferredOrder = [
+    'Node.js',
+    'TypeScript',
+    'React',
+    'Next.js',
+    'Angular',
+    'JavaScript',
+    'SQL',
+    'PostgreSQL',
+    'Supabase',
+    'MySQL',
+    'MongoDB',
+    'Tailwind CSS',
+    'HTML5',
+    'CSS3',
+  ]
+
+  const normalized = uniqueCaseInsensitive(value)
+
+  const ordered = [
+    ...preferredOrder.filter((skill) =>
+      normalized.some((item) => item.toLowerCase() === skill.toLowerCase())
+    ),
+    ...normalized.filter(
+      (item) => !preferredOrder.some((skill) => skill.toLowerCase() === item.toLowerCase())
+    ),
+  ]
+
+  return ordered.slice(0, 16)
+}
+
+function normalizeExperience(value: unknown) {
+  if (!Array.isArray(value)) return []
+
+  return value.slice(0, 3).map((item) => {
+    const roleRaw = String(item?.role ?? '').trim()
+    const company = String(item?.company ?? '').trim()
+    const period = String(item?.period ?? '').trim()
+    const stack = takeCleanStrings(item?.stack, 8)
+    const bullets = takeCleanStrings(item?.bullets, 4)
+
+    let role = roleRaw
+
+    if (
+      company.toLowerCase().includes('als inspection chile') &&
+      role.toLowerCase().includes('practicante')
+    ) {
+      role = 'Desarrollador Full Stack'
+    }
+
+    return {
+      role,
+      company,
+      period,
+      stack,
+      bullets,
+    }
+  })
+}
+
+function normalizeProjects(value: unknown) {
+  if (!Array.isArray(value)) return []
+
+  return value.slice(0, 4).map((item) => {
+    const name = String(item?.name ?? '').trim()
+    let stack = takeCleanStrings(item?.stack, 8)
+    let bullets = takeCleanStrings(item?.bullets, 3)
+
+    const loweredName = name.toLowerCase()
+
+    if (
+      loweredName.includes('job tracker') ||
+      loweredName.includes('job application copilot')
+    ) {
+      stack = [
+        'Next.js',
+        'TypeScript',
+        'Node.js',
+        'Supabase',
+        'PostgreSQL',
+        'Vercel',
+      ]
+
+      bullets = [
+        'Desarrollé un sistema que recolecta ofertas laborales, normaliza datos y genera matches personalizados según perfil.',
+        'Implementé scoring por keywords, seniority, modalidad y stack tecnológico, reduciendo falsos positivos.',
+        'Construí un flujo semi-automatizado para revisar ofertas, generar CV ATS en PDF y dar seguimiento a postulaciones por WhatsApp.',
+      ]
+    }
+
+    return {
+      name,
+      stack,
+      bullets,
+    }
+  })
+}
+
+function normalizeEducation(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 2)
+}
+
+function normalizeLanguages(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [
+      { name: 'Español', level: 'Nativo' },
+      { name: 'Inglés', level: 'Lectura técnica básica' },
+    ]
+  }
+
+  return value.slice(0, 2).map((item) => {
+    const name = String(item?.name ?? '').trim()
+    let level = String(item?.level ?? '').trim()
+
+    if (name.toLowerCase() === 'inglés' || name.toLowerCase() === 'ingles') {
+      level = 'Lectura técnica básica'
+    }
+
+    return { name, level }
+  })
+}
+
 function buildPrompt(params: GenerateAdaptedCvParams) {
   return [
     'Eres un experto en CV ATS para postulaciones tech en Chile.',
@@ -118,7 +278,7 @@ function buildPrompt(params: GenerateAdaptedCvParams) {
     'REGLAS DE REDACCIÓN:',
     '- No uses frases genéricas como "calce medio", "perfil sólido" o "demuestra su capacidad" dentro del CV.',
     '- No incluyas una sección visible llamada "Keywords ATS priorizadas".',
-    '- PHP debe aparecer solo como experiencia práctica/proyecto, no como especialidad principal del candidato.',
+    '- PHP debe aparecer solo como experiencia práctica o proyecto, no como especialidad principal del candidato.',
     '- El foco principal del candidato es Node.js, SQL, Supabase, React, Next.js, Angular y TypeScript.',
     '- El idioma inglés debe redactarse como "Lectura técnica básica", no como A2.',
     '- El CV debe sonar humano, directo y profesional, no como texto generado por IA.',
@@ -132,7 +292,7 @@ function buildPrompt(params: GenerateAdaptedCvParams) {
     '- El CV debe ser ATS friendly: claro, simple, sin tablas complejas, sin emojis.',
     '- El candidato se llama Martin Vergara.',
     '- No firmes ni nombres al candidato como profile.name.',
-    '- Puedes usar "Job Tracker / Job Application Copilot" solo si aparece en cvProfile.projects.',
+    '- Puedes usar "Job Tracker / Job Application Copilot" solo si aparece explícitamente en cvProfile.projects.',
     '- Devuelve SOLO JSON válido. Sin markdown.',
     '- El CV final debe caber idealmente en 2 páginas.',
     '- Usa máximo 4 bullets para experiencia laboral.',
@@ -142,20 +302,20 @@ function buildPrompt(params: GenerateAdaptedCvParams) {
     '- No incluyas tecnologías no respaldadas como skills principales; si aparecen solo en la oferta, van a missing_keywords.',
     '',
     'REGLAS DE ESTILO DEL CV:',
-    '- El CV debe sonar humano, directo y profesional, no como texto genérico de IA.',
     '- El perfil profesional debe tener máximo 3 oraciones.',
-    '- La sección de habilidades debe priorizar solo tecnologías realmente fuertes o relevantes para la oferta.',
-    '- No incluyas una sección visible llamada "Keywords ATS" o similar dentro del CV.',
-    '- No agregues tecnologías no respaldadas solo porque aparezcan en la oferta.',
-    '- No uses palabras como "experto", "especialista" o "dominio avanzado".',
-    '- Los proyectos deben mostrarse con máximo 3 bullets por proyecto.',
-    '- Cada bullet debe ser corto, concreto y orientado a impacto o funcionalidad real.',
-    '- Prioriza proyectos reales en uso o con valor directo para el cargo.',
-    '- Si la oferta menciona tecnologías fuera del foco principal del candidato, no las metas en skills; solo pueden quedar en missing_keywords.',
-    '- El CV debe verse como una postulación real de perfil junior, no como un documento académico ni como una plantilla robótica.',
-    '- El resumen profesional debe tener máximo 3 oraciones.',
     '- La sección de habilidades debe mostrarse compacta y enfocada en el stack principal.',
     '- Evita repetir tecnologías demasiadas veces entre resumen, skills y proyectos.',
+    '- No uses palabras como "experto", "especialista" o "dominio avanzado".',
+    '- Los bullets deben ser cortos, concretos y orientados a funcionalidad real o impacto.',
+    '- El CV debe verse como una postulación real de perfil junior.',
+    '',
+    'REGLAS ESPECIALES PARA ESTE CANDIDATO:',
+    '- En ALS no uses "Practicante" como título visible del cargo. Prefiere "Desarrollador Full Stack" o "Desarrollador Full Stack Junior".',
+    '- Para ALS prioriza Angular, TypeScript, Node.js, SQL, FullCalendar y ApexCharts si están respaldados.',
+    '- Para "Job Tracker / Job Application Copilot", el stack principal visible debe priorizar Next.js, TypeScript, Node.js, Supabase, PostgreSQL y Vercel.',
+    '- En Job Tracker, si corresponde, menciona WhatsApp o Gemini dentro de bullets, no como parte principal del stack visible.',
+    '- Reordena skills para priorizar: Node.js, TypeScript, React, Next.js, Angular, JavaScript, SQL, PostgreSQL, Supabase.',
+    '- No pongas herramientas secundarias como Bruno, Miro o Figma dentro de las skills visibles principales del CV.',
     '',
     'Formato JSON exacto:',
     JSON.stringify(
@@ -206,6 +366,7 @@ function buildPrompt(params: GenerateAdaptedCvParams) {
     JSON.stringify(params, null, 2),
   ].join('\n')
 }
+
 function takeCleanStrings(value: unknown, limit: number) {
   if (!Array.isArray(value)) return []
 
@@ -236,13 +397,13 @@ function renderExperience(value: unknown) {
       const bullets = Array.isArray(item?.bullets) ? item.bullets.map(String).slice(0, 4) : []
 
       return `
-              <article class="entry">
-                <h3>${escapeHtml(role)}${company ? ` | ${escapeHtml(company)}` : ''}</h3>
-                ${period ? `<p class="muted">${escapeHtml(period)}</p>` : ''}
-                ${stack.length ? `<p class="stack"><strong>Stack:</strong> ${escapeHtml(stack.join(' · '))}</p>` : ''}
-                ${bullets.length ? `<ul>${renderList(bullets)}</ul>` : ''}
-              </article>
-            `
+        <article class="entry">
+          <h3>${escapeHtml(role)}${company ? ` | ${escapeHtml(company)}` : ''}</h3>
+          ${period ? `<p class="muted">${escapeHtml(period)}</p>` : ''}
+          ${stack.length ? `<p class="stack"><strong>Stack:</strong> ${escapeHtml(stack.join(' · '))}</p>` : ''}
+          ${bullets.length ? `<ul>${renderList(bullets, 4)}</ul>` : ''}
+        </article>
+      `
     })
     .join('')
 }
@@ -258,12 +419,12 @@ function renderProjects(value: unknown) {
       const bullets = Array.isArray(item?.bullets) ? item.bullets.map(String).slice(0, 3) : []
 
       return `
-              <article class="entry">
-                <h3>${escapeHtml(name)}</h3>
-                ${stack.length ? `<p class="stack"><strong>Stack:</strong> ${escapeHtml(stack.join(' · '))}</p>` : ''}
-                ${bullets.length ? `<ul>${renderList(bullets)}</ul>` : ''}
-              </article>
-            `
+        <article class="entry">
+          <h3>${escapeHtml(name)}</h3>
+          ${stack.length ? `<p class="stack"><strong>Stack:</strong> ${escapeHtml(stack.join(' · '))}</p>` : ''}
+          ${bullets.length ? `<ul>${renderList(bullets, 3)}</ul>` : ''}
+        </article>
+      `
     })
     .join('')
 }
@@ -320,79 +481,89 @@ function buildHtml(content: AdaptedCvResult['contentJson']) {
 <head>
   <meta charset="utf-8" />
   <title>${escapeHtml(content.candidate_name)} - CV ATS</title>
-<style>
-  * {
-    box-sizing: border-box;
-  }
+  <style>
+    * {
+      box-sizing: border-box;
+    }
 
-  body {
-    font-family: Arial, sans-serif;
-    color: #111827;
-    line-height: 1.28;
-    max-width: 820px;
-    margin: 0 auto;
-    padding: 0;
-    font-size: 11.5px;
-  }
+    body {
+      font-family: Arial, sans-serif;
+      color: #111827;
+      line-height: 1.28;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 0;
+      font-size: 11.5px;
+    }
 
-  header {
-    margin-bottom: 8px;
-  }
+    header {
+      margin-bottom: 8px;
+    }
 
-  h1 {
-    font-size: 22px;
-    margin: 0 0 2px;
-    line-height: 1.1;
-  }
+    h1 {
+      font-size: 22px;
+      margin: 0 0 2px;
+      line-height: 1.1;
+    }
 
-  h2 {
-    font-size: 14px;
-    margin: 11px 0 5px;
-    border-bottom: 1px solid #d1d5db;
-    padding-bottom: 2px;
-    line-height: 1.15;
-  }
+    .headline {
+      font-weight: bold;
+      margin: 0 0 3px;
+      font-size: 12.5px;
+    }
 
-  h3 {
-    font-size: 12.5px;
-    margin: 7px 0 2px;
-    line-height: 1.15;
-  }
+    h2 {
+      font-size: 14px;
+      margin: 11px 0 5px;
+      border-bottom: 1px solid #d1d5db;
+      padding-bottom: 2px;
+      line-height: 1.15;
+    }
 
-  p {
-    margin: 3px 0;
-  }
+    h3 {
+      font-size: 12.5px;
+      margin: 7px 0 2px;
+      line-height: 1.15;
+    }
 
-  ul {
-    margin: 3px 0 6px 16px;
-    padding: 0;
-  }
+    p {
+      margin: 3px 0;
+    }
 
-  li {
-    margin-bottom: 2px;
-  }
+    ul {
+      margin: 3px 0 6px 16px;
+      padding: 0;
+    }
 
-  article {
-    margin-bottom: 5px;
-  }
+    li {
+      margin-bottom: 2px;
+    }
 
-  .muted {
-    color: #4b5563;
-  }
+    article {
+      margin-bottom: 5px;
+    }
 
-  .compact-line {
-    margin: 4px 0 6px;
-  }
+    .muted {
+      color: #4b5563;
+    }
 
-  .summary {
-    text-align: justify;
-  }
+    .compact-line {
+      margin: 4px 0 6px;
+    }
 
-  @page {
-    size: A4;
-    margin: 12mm;
-  }
-</style>
+    .summary {
+      text-align: justify;
+    }
+
+    .stack {
+      margin-top: 2px;
+    }
+
+    @page {
+      size: A4;
+      margin: 12mm;
+    }
+  </style>
 </head>
 <body>
   <header>
@@ -404,13 +575,13 @@ function buildHtml(content: AdaptedCvResult['contentJson']) {
 
   <section>
     <h2>Perfil profesional</h2>
-    <p>${escapeHtml(content.summary)}</p>
+    <p class="summary">${escapeHtml(content.summary)}</p>
   </section>
 
-<section>
-  <h2>Habilidades técnicas</h2>
-  <p class="compact-line">${escapeHtml(skillsText)}</p>
-</section>
+  <section>
+    <h2>Habilidades técnicas</h2>
+    <p class="compact-line">${escapeHtml(skillsText)}</p>
+  </section>
 
   <section>
     <h2>Experiencia</h2>
@@ -485,20 +656,41 @@ export async function generateAdaptedCv(
 
   const parsed = JSON.parse(cleanJsonText(text)) as Partial<AdaptedCvResult['contentJson']>
 
+  const normalizedExperience = normalizeExperience(
+    parsed.experience ?? params.cvProfile?.experience ?? []
+  )
+
+  const normalizedProjects = normalizeProjects(
+    parsed.projects ?? params.cvProfile?.projects ?? []
+  )
+
+  const normalizedEducation = normalizeEducation(
+    parsed.education ?? params.cvProfile?.education ?? []
+  )
+
+  const normalizedLanguages = normalizeLanguages(
+    parsed.languages ?? params.cvProfile?.languages ?? []
+  )
+
+  const normalizedSkills = normalizeSkills(
+    asStringArray(parsed.skills, params.cvProfile?.skills ?? [])
+  )
+
   const contentJson: AdaptedCvResult['contentJson'] = {
     candidate_name: 'Martin Vergara',
-    headline:
+    headline: normalizeHeadline(
       parsed.headline ||
       params.cvProfile?.headline ||
-      'Desarrollador Full Stack Jr. | Foco Backend',
+      'Desarrollador Full Stack Junior | Node.js, React, TypeScript, SQL'
+    ),
     target_role: params.job.title,
     target_company: params.job.company,
-    summary: parsed.summary || params.cvProfile?.summary || '',
-    skills: asStringArray(parsed.skills, params.cvProfile?.skills ?? []),
-    experience: parsed.experience ?? params.cvProfile?.experience ?? {},
-    projects: parsed.projects ?? params.cvProfile?.projects ?? {},
-    education: parsed.education ?? params.cvProfile?.education ?? {},
-    languages: parsed.languages ?? params.cvProfile?.languages ?? {},
+    summary: normalizeSummary(parsed.summary || params.cvProfile?.summary || ''),
+    skills: normalizedSkills,
+    experience: normalizedExperience,
+    projects: normalizedProjects,
+    education: normalizedEducation,
+    languages: normalizedLanguages,
     ats_keywords: asStringArray(parsed.ats_keywords, params.applicationPack?.ats_keywords ?? []),
     missing_keywords: asStringArray(parsed.missing_keywords, params.applicationPack?.missing_keywords ?? []),
   }
