@@ -961,6 +961,7 @@ async function handleMatchesCommand(params: {
 }) {
     const supabase = createAdminClient()
     const limit = params.limit ?? 5
+    const profileId = '7fab5bd9-502d-412d-b37e-bace8ed4487f'
 
     const { data: matches, error } = await supabase
         .from('job_matches')
@@ -985,24 +986,43 @@ async function handleMatchesCommand(params: {
         `)
         .eq('is_match', true)
         .eq('dismissed', false)
+        .eq('profile_id', profileId)
         .gte('score', 120)
         .order('score', { ascending: false })
-        .limit(20)
+        .limit(50)
 
     if (error) {
         throw new Error(error.message)
     }
 
+    const { data: applications, error: applicationsError } = await supabase
+        .from('job_applications')
+        .select('job_id, status')
+        .eq('profile_id', profileId)
+        .in('status', ['saved', 'ready', 'approved', 'applied', 'interview', 'offer'])
+
+    if (applicationsError) {
+        throw new Error(applicationsError.message)
+    }
+
+    const excludedJobIds = new Set((applications ?? []).map((row) => row.job_id))
+
     const rows = ((matches ?? []) as unknown as TopMatchRow[])
         .filter((row) => row.search_profiles?.slug === 'martin_backend_jr')
+        .filter((row) => !excludedJobIds.has(row.job_id))
         .slice(0, limit)
 
     if (rows.length === 0) {
         return {
             message: [
-                'No encontré matches activos buenos en este momento.',
+                'No encontré matches nuevos buenos en este momento.',
                 '',
-                'Puedes correr:',
+                'Puede pasar porque tus mejores ofertas ya están guardadas o postuladas.',
+                '',
+                'Puedes revisar:',
+                'postulaciones',
+                '',
+                'o correr:',
                 'run',
             ].join('\n'),
         }
@@ -1049,7 +1069,7 @@ async function handleMatchesCommand(params: {
     return {
         sessionId: session.id,
         message: [
-            `🚀 Encontré ${rows.length} matches buenos para revisar`,
+            `🚀 Encontré ${rows.length} matches nuevos buenos para revisar`,
             '',
             ...rows.flatMap((row, index) => {
                 const job = row.jobs
