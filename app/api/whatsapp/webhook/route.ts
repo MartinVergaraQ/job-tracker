@@ -105,6 +105,7 @@ type MatchCommand = {
     | 'aplicado'
     | 'cvdoc'
     | 'link'
+    | 'deshacer'
     itemNumber: number
 }
 
@@ -125,6 +126,29 @@ type ApplicationRow = {
         name: string
         slug: string
     } | null
+}
+
+function formatDateCL(value: string | null | undefined) {
+    if (!value) return null
+
+    try {
+        return new Date(value).toLocaleDateString('es-CL')
+    } catch {
+        return value
+    }
+}
+
+function buildApplicationLines(rows: ApplicationRow[]) {
+    return rows.flatMap((row, index) => {
+        const job = row.jobs
+
+        return [
+            `${index + 1}. ${job?.title ?? 'Sin cargo'} - ${job?.company ?? 'Empresa no indicada'}`,
+            row.applied_at ? `   Postulado: ${formatDateCL(row.applied_at)}` : null,
+            `   Actualizado: ${formatDateCL(row.updated_at)}`,
+            job?.url ? `   Link: ${job.url}` : null,
+        ].filter(Boolean) as string[]
+    })
 }
 
 async function handleApplicationsCommand(params: {
@@ -152,7 +176,7 @@ async function handleApplicationsCommand(params: {
         `)
         .eq('profile_id', '7fab5bd9-502d-412d-b37e-bace8ed4487f')
         .order('updated_at', { ascending: false })
-        .limit(10)
+        .limit(30)
 
     if (error) {
         throw new Error(error.message)
@@ -174,35 +198,63 @@ async function handleApplicationsCommand(params: {
         ].join('\n')
     }
 
-    const statusLabel: Record<string, string> = {
-        saved: '💾 Guardada',
-        ready: '📄 CV listo',
-        approved: '🟡 Aprobada',
-        applied: '✅ Postulada',
-        interview: '🎙️ Entrevista',
-        rejected: '❌ Rechazada',
-        offer: '🎉 Oferta',
+    const appliedRows = rows.filter((row) => row.status === 'applied')
+    const approvedRows = rows.filter((row) => row.status === 'approved')
+    const readyRows = rows.filter((row) => row.status === 'ready')
+    const savedRows = rows.filter((row) => row.status === 'saved')
+    const interviewRows = rows.filter((row) => row.status === 'interview')
+    const offerRows = rows.filter((row) => row.status === 'offer')
+    const rejectedRows = rows.filter((row) => row.status === 'rejected')
+
+    const sections: string[] = ['📌 Tus postulaciones', '']
+
+    if (appliedRows.length > 0) {
+        sections.push(`✅ Postuladas (${appliedRows.length})`)
+        sections.push(...buildApplicationLines(appliedRows))
+        sections.push('')
     }
 
-    return [
-        '📌 Tus últimas postulaciones',
-        '',
-        ...rows.flatMap((row, index) => {
-            const job = row.jobs
-            const label = statusLabel[row.status] ?? row.status
+    if (approvedRows.length > 0) {
+        sections.push(`🟡 Aprobadas (${approvedRows.length})`)
+        sections.push(...buildApplicationLines(approvedRows))
+        sections.push('')
+    }
 
-            return [
-                `${index + 1}. ${label}`,
-                `   ${job?.title ?? 'Sin cargo'} - ${job?.company ?? 'Empresa no indicada'}`,
-                row.applied_at ? `   Postulado: ${new Date(row.applied_at).toLocaleDateString('es-CL')}` : null,
-                job?.url ? `   Link: ${job.url}` : null,
-                '',
-            ].filter(Boolean)
-        }),
-        'Comandos útiles:',
-        'matches',
-        'run',
-    ].join('\n')
+    if (readyRows.length > 0) {
+        sections.push(`📄 CV listo (${readyRows.length})`)
+        sections.push(...buildApplicationLines(readyRows))
+        sections.push('')
+    }
+
+    if (savedRows.length > 0) {
+        sections.push(`💾 Guardadas (${savedRows.length})`)
+        sections.push(...buildApplicationLines(savedRows))
+        sections.push('')
+    }
+
+    if (interviewRows.length > 0) {
+        sections.push(`🎙️ Entrevistas (${interviewRows.length})`)
+        sections.push(...buildApplicationLines(interviewRows))
+        sections.push('')
+    }
+
+    if (offerRows.length > 0) {
+        sections.push(`🎉 Ofertas (${offerRows.length})`)
+        sections.push(...buildApplicationLines(offerRows))
+        sections.push('')
+    }
+
+    if (rejectedRows.length > 0) {
+        sections.push(`❌ Rechazadas (${rejectedRows.length})`)
+        sections.push(...buildApplicationLines(rejectedRows))
+        sections.push('')
+    }
+
+    sections.push('Comandos útiles:')
+    sections.push('matches')
+    sections.push('run')
+
+    return sections.join('\n')
 }
 
 function isPackCommandMode(action: MatchCommand['action']): action is PackCommandMode {
@@ -280,7 +332,7 @@ type CvProfileRow = {
 }
 
 function parseMatchCommand(command: string): MatchCommand | null {
-    const match = command.match(/^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado|cvdoc|link)\s+(\d+)$/)
+    const match = command.match(/^(match|preparar|pack|mensaje|cv|carta|confirmar|descartar|aplicado|cvdoc|link|deshacer)\s+(\d+)$/)
     if (!match) return null
 
     const action = match[1] as MatchCommand['action']
@@ -314,6 +366,28 @@ function normalizeText(value: string | null | undefined) {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .trim()
+}
+
+function buildNoActiveSessionMessage() {
+    return [
+        'No tienes una sesión activa de matches.',
+        '',
+        'Primero responde:',
+        'matches',
+        'o vuelve a correr:',
+        'run',
+    ].join('\n')
+}
+
+function buildMatchNotFoundMessage(itemNumber: number) {
+    return [
+        `No encontré el match ${itemNumber}.`,
+        '',
+        'Responde:',
+        'matches',
+        'o vuelve a correr:',
+        'run',
+    ].join('\n')
 }
 
 function buildMatchAlerts(row: SessionItemRow) {
@@ -466,17 +540,10 @@ async function handleLinkCommand(params: {
 
     if (!result.ok) {
         if (result.reason === 'no_active_session') {
-            return [
-                'No tienes una sesión activa de matches.',
-                '',
-                'Primero responde:',
-                'matches',
-                'o:',
-                'run',
-            ].join('\n')
+            return buildNoActiveSessionMessage()
         }
 
-        return `No encontré el match ${params.itemNumber}.`
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     const item = result.item
@@ -519,14 +586,11 @@ async function handleCvDocCommand(params: {
     })
 
     if (!result.ok) {
-        return [
-            `No encontré el match ${params.itemNumber}.`,
-            '',
-            'Primero responde:',
-            'matches',
-            'o vuelve a correr:',
-            'run',
-        ].join('\n')
+        if (result.reason === 'no_active_session') {
+            return buildNoActiveSessionMessage()
+        }
+
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     const item = result.item
@@ -688,6 +752,81 @@ async function handleCvDocCommand(params: {
     ].join('\n')
 }
 
+async function handleUndoCommand(params: {
+    recipient: string
+    itemNumber: number
+}) {
+    const result = await getSessionItemByNumber({
+        recipient: params.recipient,
+        itemNumber: params.itemNumber,
+    })
+
+    if (!result.ok) {
+        if (result.reason === 'no_active_session') {
+            return buildNoActiveSessionMessage()
+        }
+
+        return buildMatchNotFoundMessage(params.itemNumber)
+    }
+
+    const item = result.item
+    const job = item.jobs
+    const profile = item.search_profiles
+    const supabase = createAdminClient()
+    const now = new Date().toISOString()
+
+    const { error: applicationError } = await supabase
+        .from('job_applications')
+        .upsert(
+            {
+                job_id: item.job_id,
+                profile_id: item.profile_id,
+                status: 'saved',
+                applied_at: null,
+                notes: 'Estado revertido desde WhatsApp.',
+                source_notes: 'whatsapp_command:deshacer',
+                updated_at: now,
+            },
+            {
+                onConflict: 'job_id,profile_id',
+            }
+        )
+
+    if (applicationError) {
+        throw new Error(applicationError.message)
+    }
+
+    const { error: matchError } = await supabase
+        .from('job_matches')
+        .update({
+            dismissed: false,
+            saved: true,
+        })
+        .eq('id', item.match_id)
+
+    if (matchError) {
+        throw new Error(matchError.message)
+    }
+
+    return [
+        `↩️ Estado revertido para Match ${params.itemNumber}`,
+        '',
+        job ? `Cargo: ${job.title}` : null,
+        job ? `Empresa: ${job.company}` : null,
+        profile ? `Perfil: ${profile.name}` : null,
+        '',
+        'Nuevo estado:',
+        'saved',
+        '',
+        'Puedes seguir con:',
+        `pack ${params.itemNumber}`,
+        `cvdoc ${params.itemNumber}`,
+        `confirmar ${params.itemNumber}`,
+    ]
+        .filter(Boolean)
+        .join('\n')
+}
+
 async function getSessionItemByNumber(params: {
     recipient: string
     itemNumber: number
@@ -782,22 +921,10 @@ async function handleMatchDetailCommand(params: {
 
     if (!result.ok) {
         if (result.reason === 'no_active_session') {
-            return [
-                'No tienes una sesión activa de matches.',
-                '',
-                'Primero responde:',
-                'run',
-            ].join('\n')
+            return buildNoActiveSessionMessage()
         }
 
-        return [
-            `No encontré el match ${params.itemNumber}.`,
-            '',
-            'Responde:',
-            'matches',
-            'o vuelve a correr:',
-            'run',
-        ].join('\n')
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     return buildMatchDetailMessage(result.item)
@@ -950,15 +1077,10 @@ async function handleDismissCommand(params: {
 
     if (!result.ok) {
         if (result.reason === 'no_active_session') {
-            return [
-                'No tienes una sesión activa de matches.',
-                '',
-                'Primero responde:',
-                'run',
-            ].join('\n')
+            return buildNoActiveSessionMessage()
         }
 
-        return `No encontré el match ${params.itemNumber}.`
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     const item = result.item
@@ -1003,15 +1125,10 @@ async function handleAppliedCommand(params: {
 
     if (!result.ok) {
         if (result.reason === 'no_active_session') {
-            return [
-                'No tienes una sesión activa de matches.',
-                '',
-                'Primero responde:',
-                'run',
-            ].join('\n')
+            return buildNoActiveSessionMessage()
         }
 
-        return `No encontré el match ${params.itemNumber}.`
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     const item = result.item
@@ -1330,15 +1447,10 @@ async function handlePrepareCommand(params: {
 
     if (!result.ok) {
         if (result.reason === 'no_active_session') {
-            return [
-                'No tienes una sesión activa de matches.',
-                '',
-                'Primero responde:',
-                'run',
-            ].join('\n')
+            return buildNoActiveSessionMessage()
         }
 
-        return `No encontré el match ${params.itemNumber}.`
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     const item = result.item
@@ -1677,12 +1789,7 @@ async function handlePackCommand(params: {
 
     if (!result.ok) {
         if (result.reason === 'no_active_session') {
-            return [
-                'No tienes una sesión activa de matches.',
-                '',
-                'Primero responde:',
-                'run',
-            ].join('\n')
+            return buildNoActiveSessionMessage()
         }
 
         if (result.reason === 'pack_not_found') {
@@ -1694,7 +1801,7 @@ async function handlePackCommand(params: {
             ].join('\n')
         }
 
-        return `No encontré el match ${params.itemNumber}.`
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     if (params.mode === 'mensaje') {
@@ -1734,12 +1841,7 @@ async function handleConfirmCommand(params: {
 
     if (!packResult.ok) {
         if (packResult.reason === 'no_active_session') {
-            return [
-                'No tienes una sesión activa de matches.',
-                '',
-                'Primero responde:',
-                'run',
-            ].join('\n')
+            return buildNoActiveSessionMessage()
         }
 
         if (packResult.reason === 'pack_not_found') {
@@ -1751,7 +1853,7 @@ async function handleConfirmCommand(params: {
             ].join('\n')
         }
 
-        return `No encontré el match ${params.itemNumber}.`
+        return buildMatchNotFoundMessage(params.itemNumber)
     }
 
     const item = packResult.item
@@ -1896,6 +1998,7 @@ function buildHelpMessage() {
         'aplicado 1 - marcar como postulado',
         'link 1 - ver link directo de postulación',
         'postulaciones - ver postulaciones guardadas/aprobadas/postuladas',
+        'deshacer 1 - revertir estado de prueba o postulación',
         'ayuda - ver comandos',
         '',
         'Ejemplo:',
@@ -2293,9 +2396,29 @@ export async function POST(request: NextRequest): Promise<Response> {
 
             continue
         }
+
         if (matchCommand?.action === 'cvdoc') {
             after(async () => {
                 try {
+                    const exists = await getSessionItemByNumber({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                    })
+
+                    if (!exists.ok) {
+                        const message =
+                            exists.reason === 'no_active_session'
+                                ? buildNoActiveSessionMessage()
+                                : buildMatchNotFoundMessage(matchCommand.itemNumber)
+
+                        await sendWhatsAppMessage({
+                            to: incoming.from,
+                            body: message,
+                        })
+
+                        return
+                    }
+
                     await sendWhatsAppMessage({
                         to: incoming.from,
                         body: '📄 Generando CV ATS en PDF. Dame unos segundos...',
@@ -2325,6 +2448,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
             continue
         }
+
         if (matchCommand?.action === 'link') {
             after(async () => {
                 try {
@@ -2367,6 +2491,33 @@ export async function POST(request: NextRequest): Promise<Response> {
                         to: incoming.from,
                         body: [
                             '❌ No pude cargar tus postulaciones.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
+            })
+
+            continue
+        }
+
+        if (matchCommand?.action === 'deshacer') {
+            after(async () => {
+                try {
+                    const message = await handleUndoCommand({
+                        recipient: incoming.from,
+                        itemNumber: matchCommand.itemNumber,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude revertir el estado.',
                             '',
                             error instanceof Error ? error.message : 'Error desconocido',
                         ].join('\n'),
