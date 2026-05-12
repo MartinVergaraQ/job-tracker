@@ -308,6 +308,106 @@ function formatTags(tags: string[] | null | undefined) {
     if (!tags || tags.length === 0) return 'Sin tags'
     return tags.slice(0, 12).join(', ')
 }
+function normalizeText(value: string | null | undefined) {
+    return (value ?? '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+}
+
+function buildMatchAlerts(row: SessionItemRow) {
+    const job = row.jobs
+
+    if (!job) return []
+
+    const text = normalizeText(
+        [
+            job.title,
+            job.description ?? '',
+            ...(job.tech_tags ?? []),
+        ].join(' ')
+    )
+
+    const alerts: string[] = []
+
+    const offStackSignals = [
+        'java',
+        'spring',
+        'spring boot',
+        '.net',
+        'dotnet',
+        'c#',
+        'go',
+        'golang',
+        'aws',
+    ]
+
+    const coreSignals = [
+        'node',
+        'node.js',
+        'react',
+        'next',
+        'next.js',
+        'typescript',
+        'javascript',
+        'sql',
+        'postgresql',
+        'php',
+        'laravel',
+        'supabase',
+    ]
+
+    const detectedOffStack = offStackSignals.filter((signal) =>
+        text.includes(signal)
+    )
+
+    const detectedCore = coreSignals.filter((signal) =>
+        text.includes(signal)
+    )
+
+    const hasSeniorSignal =
+        text.includes('senior') ||
+        text.includes('semi senior') ||
+        text.includes('semisenior') ||
+        text.includes('semi-senior') ||
+        text.includes('lead') ||
+        text.includes('architect') ||
+        text.includes('arquitecto')
+
+    if (detectedOffStack.length >= 3) {
+        alerts.push(
+            `Stack mixto: aparecen tecnologías fuera de foco principal (${detectedOffStack
+                .slice(0, 5)
+                .join(', ')}).`
+        )
+    }
+
+    if (detectedOffStack.length > 0 && detectedCore.length > 0) {
+        alerts.push(
+            'Revisar si las tecnologías fuera de tu stack son obligatorias o solo deseables.'
+        )
+    }
+
+    if (hasSeniorSignal) {
+        alerts.push(
+            'La oferta tiene señales de seniority más alta. Revisa experiencia exigida antes de postular.'
+        )
+    }
+
+    if (
+        text.includes('java') &&
+        !text.includes('node') &&
+        !text.includes('react') &&
+        !text.includes('typescript')
+    ) {
+        alerts.push(
+            'La vacante parece más orientada a Java que a tu stack principal.'
+        )
+    }
+
+    return alerts.slice(0, 3)
+}
 
 function buildMatchDetailMessage(row: SessionItemRow) {
     const job = row.jobs
@@ -319,6 +419,7 @@ function buildMatchDetailMessage(row: SessionItemRow) {
     }
 
     const reasons = normalizeReasons(match.reasons)
+    const alerts = buildMatchAlerts(row)
 
     return [
         `🎯 Match ${row.item_number}`,
@@ -336,15 +437,19 @@ function buildMatchDetailMessage(row: SessionItemRow) {
         '',
         'Por qué calza:',
         ...reasons.map((reason) => `- ${reason}`),
+        alerts.length > 0 ? '' : null,
+        alerts.length > 0 ? 'Alertas:' : null,
+        ...alerts.map((alert) => `- ${alert}`),
         '',
         'Link:',
         job.url,
         '',
         'Puedes responder:',
         `preparar ${row.item_number}`,
+        `cvdoc ${row.item_number}`,
+        `link ${row.item_number}`,
         `descartar ${row.item_number}`,
         `aplicado ${row.item_number}`,
-        `link ${row.item_number}`,
     ]
         .filter(Boolean)
         .join('\n')
