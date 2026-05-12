@@ -153,6 +153,117 @@ function buildApplicationLines(rows: ApplicationRow[]) {
     })
 }
 
+async function handlePendingApplicationsCommand(params: {
+    recipient: string
+}) {
+    const supabase = createAdminClient()
+
+    const { data, error } = await supabase
+        .from('job_applications')
+        .select(`
+            id,
+            status,
+            applied_at,
+            updated_at,
+            notes,
+            jobs (
+                title,
+                company,
+                url
+            ),
+            search_profiles (
+                name,
+                slug
+            )
+        `)
+        .eq('profile_id', '7fab5bd9-502d-412d-b37e-bace8ed4487f')
+        .in('status', ['saved', 'ready', 'approved'])
+        .order('updated_at', { ascending: false })
+        .limit(20)
+
+    if (error) {
+        throw new Error(error.message)
+    }
+
+    const rows = (data ?? []) as unknown as ApplicationRow[]
+
+    if (rows.length === 0) {
+        return [
+            'No tienes postulaciones pendientes por avanzar.',
+            '',
+            'Puedes revisar:',
+            'matches',
+            'o correr:',
+            'run',
+        ].join('\n')
+    }
+
+    const approvedRows = rows.filter((row) => row.status === 'approved')
+    const readyRows = rows.filter((row) => row.status === 'ready')
+    const savedRows = rows.filter((row) => row.status === 'saved')
+
+    const sections: string[] = ['📌 Pendientes por avanzar', '']
+
+    if (approvedRows.length > 0) {
+        sections.push(`🟡 Aprobadas (${approvedRows.length})`)
+        sections.push(
+            ...approvedRows.flatMap((row, index) => {
+                const job = row.jobs
+                return [
+                    `${index + 1}. ${job?.title ?? 'Sin cargo'} - ${job?.company ?? 'Empresa no indicada'}`,
+                    `   Actualizado: ${formatDateCL(row.updated_at)}`,
+                    job?.url ? `   Link: ${job.url}` : null,
+                    '   Acción sugerida: postular y luego responder aplicado N',
+                ].filter(Boolean) as string[]
+            })
+        )
+        sections.push('')
+    }
+
+    if (readyRows.length > 0) {
+        sections.push(`📄 CV listo (${readyRows.length})`)
+        sections.push(
+            ...readyRows.flatMap((row, index) => {
+                const job = row.jobs
+                return [
+                    `${index + 1}. ${job?.title ?? 'Sin cargo'} - ${job?.company ?? 'Empresa no indicada'}`,
+                    `   Actualizado: ${formatDateCL(row.updated_at)}`,
+                    job?.url ? `   Link: ${job.url}` : null,
+                    '   Acción sugerida: confirmar N',
+                ].filter(Boolean) as string[]
+            })
+        )
+        sections.push('')
+    }
+
+    if (savedRows.length > 0) {
+        sections.push(`💾 Guardadas (${savedRows.length})`)
+        sections.push(
+            ...savedRows.flatMap((row, index) => {
+                const job = row.jobs
+                return [
+                    `${index + 1}. ${job?.title ?? 'Sin cargo'} - ${job?.company ?? 'Empresa no indicada'}`,
+                    `   Actualizado: ${formatDateCL(row.updated_at)}`,
+                    job?.url ? `   Link: ${job.url}` : null,
+                    '   Acción sugerida: pack N o cvdoc N',
+                ].filter(Boolean) as string[]
+            })
+        )
+        sections.push('')
+    }
+
+    sections.push(
+        `Resumen: Aprobadas ${approvedRows.length} | CV listo ${readyRows.length} | Guardadas ${savedRows.length}`
+    )
+    sections.push('')
+    sections.push('Comandos útiles:')
+    sections.push('matches')
+    sections.push('postulaciones')
+    sections.push('run')
+
+    return sections.join('\n')
+}
+
 async function handleApplicationsCommand(params: {
     recipient: string
 }) {
@@ -2146,6 +2257,7 @@ function buildHelpMessage() {
         'link 1 - ver link directo de postulación',
         'postulaciones - ver postulaciones guardadas/aprobadas/postuladas',
         'deshacer 1 - revertir estado de prueba o postulación',
+        'pendientes - ver postulaciones que aún requieren acción',
         'ayuda - ver comandos',
         '',
         'Ejemplo:',
@@ -2638,6 +2750,32 @@ export async function POST(request: NextRequest): Promise<Response> {
                         to: incoming.from,
                         body: [
                             '❌ No pude cargar tus postulaciones.',
+                            '',
+                            error instanceof Error ? error.message : 'Error desconocido',
+                        ].join('\n'),
+                    })
+                }
+            })
+
+            continue
+        }
+
+        if (command === 'pendientes' || command === 'pending') {
+            after(async () => {
+                try {
+                    const message = await handlePendingApplicationsCommand({
+                        recipient: incoming.from,
+                    })
+
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: message,
+                    })
+                } catch (error) {
+                    await sendWhatsAppMessage({
+                        to: incoming.from,
+                        body: [
+                            '❌ No pude cargar tus pendientes.',
                             '',
                             error instanceof Error ? error.message : 'Error desconocido',
                         ].join('\n'),
