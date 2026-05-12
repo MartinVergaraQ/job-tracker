@@ -25,6 +25,11 @@ const NAV_ITEMS = [
         description: 'Trabajos recolectados',
     },
     {
+        href: '/admin/cv-base',
+        label: 'CV Base',
+        description: 'ingresar cv para base',
+    },
+    {
         href: '/admin/conversion',
         label: 'Conversión',
         description: 'Métricas por fuente/CV',
@@ -34,6 +39,7 @@ const NAV_ITEMS = [
         label: 'Runs',
         description: 'Historial del colector',
     },
+
 ] as const
 
 function isActivePath(pathname: string, href: string) {
