@@ -36,6 +36,7 @@ const MID_SIGNALS = [
 const SENIOR_SIGNALS = [
     'senior',
     'sr',
+    'sr.',
     'lead',
     'líder',
     'lider',
@@ -46,6 +47,8 @@ const SENIOR_SIGNALS = [
     'manager',
     'jefe',
     'head',
+    'especialista',
+    'advanced',
 ]
 
 const QA_SIGNALS = [
@@ -112,6 +115,46 @@ const BAD_ROLE_SIGNALS = [
     'mobile senior',
 ]
 
+const EXPERIENCE_HEAVY_SIGNALS = [
+    '3 años',
+    '3+ años',
+    '4 años',
+    '4+ años',
+    '5 años',
+    '5+ años',
+    '6 años',
+    '20+',
+    '20 años',
+    'experiencia comprobable',
+    'experiencia solida',
+    'experiencia sólida',
+    'experiencia avanzada',
+    'experiencia senior',
+]
+
+const JAVA_TITLE_SIGNALS = [
+    'backend java',
+    'desarrollador java',
+    'java developer',
+    'spring boot',
+    'java spring',
+]
+
+const DOTNET_TITLE_SIGNALS = [
+    'c#',
+    '.net',
+    'asp.net',
+    'dotnet',
+]
+
+const INTERMEDIATE_SIGNALS = [
+    'intermedio',
+    'semi senior',
+    'semisenior',
+    'semi-senior',
+    'ssr',
+]
+
 function normalizeText(value: string | null | undefined) {
     return (value ?? '')
         .toLowerCase()
@@ -120,6 +163,57 @@ function normalizeText(value: string | null | undefined) {
         .replace(/[^\w\s.+#/-]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
+}
+
+function strictJuniorHardRejectRules(
+    job: NormalizedJob,
+    profile: SearchProfile
+): RuleResult {
+    const title = buildTitleText(job)
+    const text = buildHaystack(job)
+
+    const reasons: string[] = []
+    let score = 0
+    let hardReject = false
+
+    const strictJunior = profileIsStrictJunior(profile)
+    const allowsSenior = profileAllowsSenior(profile)
+
+    if (!strictJunior) {
+        return { score, reasons, hardReject }
+    }
+
+    if (includesAny(title, SENIOR_SIGNALS) && !allowsSenior) {
+        score -= 300
+        hardReject = true
+        reasons.push('Descartado: cargo Senior/Lead no compatible con perfil Junior')
+    }
+
+    if (includesAny(title, INTERMEDIATE_SIGNALS)) {
+        score -= 180
+        hardReject = true
+        reasons.push('Descartado: cargo Intermedio/Semi Senior no compatible con perfil Junior actual')
+    }
+
+    if (includesAny(text, EXPERIENCE_HEAVY_SIGNALS) && !allowsSenior) {
+        score -= 180
+        hardReject = true
+        reasons.push('Descartado: pide experiencia mayor a perfil Junior')
+    }
+
+    if (includesAny(title, JAVA_TITLE_SIGNALS)) {
+        score -= 160
+        hardReject = true
+        reasons.push('Descartado: cargo centrado en Java/Spring, fuera del foco principal actual')
+    }
+
+    if (includesAny(title, DOTNET_TITLE_SIGNALS)) {
+        score -= 160
+        hardReject = true
+        reasons.push('Descartado: cargo centrado en C#/.NET, fuera del foco principal actual')
+    }
+
+    return { score, reasons, hardReject }
 }
 
 function includesAny(text: string, terms: string[]) {
@@ -366,6 +460,7 @@ export function scoreJob(
     profile: SearchProfile
 ): JobScoreResult {
     const rules = [
+        strictJuniorHardRejectRules(job, profile),
         seniorityRules(job, profile),
         roleRules(job, profile),
         keywordRules(job, profile),
@@ -388,9 +483,17 @@ export function scoreJob(
 
     const cleanReasons = Array.from(new Set(reasons))
 
+    if (hardReject) {
+        return {
+            score: Math.max(0, Math.round(score)),
+            is_match: false,
+            reasons: cleanReasons,
+        }
+    }
+
     return {
-        score,
-        is_match: !hardReject && score >= profile.min_score,
+        score: Math.max(0, Math.round(score)),
+        is_match: score >= profile.min_score,
         reasons: cleanReasons,
     }
 }

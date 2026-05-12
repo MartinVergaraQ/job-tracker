@@ -703,7 +703,7 @@ async function handleMatchesCommand(params: {
         `)
         .eq('is_match', true)
         .eq('dismissed', false)
-        .gte('score', 80)
+        .gte('score', 120)
         .order('score', { ascending: false })
         .limit(20)
 
