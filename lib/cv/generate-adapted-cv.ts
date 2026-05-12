@@ -130,7 +130,7 @@ function uniqueCaseInsensitive(values: string[]) {
 function normalizeHeadline(value: string | null | undefined) {
   const text = (value ?? '').trim()
   if (!text) {
-    return 'Desarrollador Full Stack Junior | Node.js, React, TypeScript, SQL'
+    return 'Desarrollador Full Stack Jr. | Foco Backend'
   }
 
   return text
@@ -139,7 +139,7 @@ function normalizeHeadline(value: string | null | undefined) {
 function normalizeSummary(value: string | null | undefined) {
   const text = (value ?? '').trim()
   if (!text) {
-    return 'Desarrollador Full Stack Junior con experiencia en la construcción de productos web y sistemas orientados a negocio. Mi foco principal está en backend con Node.js, SQL y Supabase, junto con experiencia práctica en APIs REST, paneles administrativos y automatizaciones. Cuento además con base sólida en frontend utilizando React, Next.js, Angular y TypeScript para desarrollar soluciones completas.'
+    return 'Desarrollador Full Stack Junior con foco en backend y experiencia construyendo productos web y sistemas orientados a negocio.'
   }
 
   return text
@@ -697,13 +697,13 @@ export async function generateAdaptedCv(
   const contentJson: AdaptedCvResult['contentJson'] = {
     candidate_name: 'Martin Vergara',
     headline: normalizeHeadline(
-      parsed.headline ||
-      params.cvProfile?.headline ||
-      'Desarrollador Full Stack Junior | Node.js, React, TypeScript, SQL'
+      params.cvProfile?.headline || 'Desarrollador Full Stack Jr. | Foco Backend'
     ),
     target_role: params.job.title,
     target_company: params.job.company,
-    summary: normalizeSummary(parsed.summary || params.cvProfile?.summary || ''),
+    summary: normalizeSummary(
+      params.cvProfile?.summary || ''
+    ),
     skills: normalizedSkills,
     experience: normalizedExperience,
     projects: normalizedProjects,
